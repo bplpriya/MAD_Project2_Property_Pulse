@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "499179503240",
+    "project_id": "propertypulse-cec60",
+    "storage_bucket": "propertypulse-cec60.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:499179503240:android:0dc0aabcf55c161810293d",
+        "android_client_info": {
+          "package_name": "com.example.mad_project2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCqy3ZjtiPma7kWVHIScn4sqRWg40UbMfY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
