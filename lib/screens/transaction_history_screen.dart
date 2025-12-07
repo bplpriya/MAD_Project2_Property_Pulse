@@ -70,7 +70,8 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                     final String type = isPurchase ? 'Purchase' : 'Sale';
                     final Color typeColor = isPurchase ? Colors.green.shade700 : Colors.orange.shade700;
                     
-                    final int tokenChange = data['tokenChange'] ?? 0;
+                    // Changed from 'tokenChange' to 'price' (assuming transactions store the property price)
+                    final int price = data['price'] ?? 0; 
                     final String status = data['status'] ?? 'Completed';
                     final String itemId = data['itemId'] ?? 'N/A';
                     
@@ -105,10 +106,12 @@ class _TransactionHistoryScreenState extends State<TransactionHistoryScreen> {
                           crossAxisAlignment: CrossAxisAlignment.end,
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
+                            // Display the price/amount involved in the transaction
                             Text(
-                              isPurchase ? '- $tokenChange Tokens' : '+ $tokenChange Tokens',
+                              isPurchase ? '-\$$price' : '+\$$price', // Using '$' as a generic currency sign
                               style: TextStyle(
                                 fontWeight: FontWeight.bold,
+                                // Color remains to indicate direction (spent/received)
                                 color: isPurchase ? Colors.red.shade700 : Colors.green.shade700,
                               ),
                             ),

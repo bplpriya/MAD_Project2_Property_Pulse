@@ -17,7 +17,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
   final AuthService _authService = AuthService();
-  int tokens = 0;
+  // REMOVED: int tokens = 0;
   String name = 'Loading...';
   String role = '';
 
@@ -34,8 +34,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       final doc = await _firestore.collection('users').doc(user.uid).get();
       final data = doc.data();
       setState(() {
-        // Tokens initialized to 1000 on sign-up
-        tokens = data?['tokens'] ?? 1000; 
+        // REMOVED: tokens = data?['tokens'] ?? 1000; 
         name = data?['name'] ?? user.email ?? 'User';
         role = data?['role'] ?? 'Unknown';
       });
@@ -90,26 +89,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             const SizedBox(height: 30),
 
-            // Token Display
-            Card(
-              elevation: 4,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 25),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.monetization_on, color: Colors.amber.shade700, size: 30),
-                    const SizedBox(width: 10),
-                    Text(
-                      'Tokens: $tokens', 
-                      style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 30),
+            // REMOVED: Token Display Card
+            // Card(
+            //   elevation: 4,
+            //   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+            //   child: Padding(
+            //     padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 25),
+            //     child: Row(
+            //       mainAxisAlignment: MainAxisAlignment.center,
+            //       mainAxisSize: MainAxisSize.min,
+            //       children: [
+            //         Icon(Icons.monetization_on, color: Colors.amber.shade700, size: 30),
+            //         const SizedBox(width: 10),
+            //         Text(
+            //           'Tokens: $tokens', 
+            //           style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+            //       ],
+            //     ),
+            //   ),
+            // ),
+            // const SizedBox(height: 30),
             
             // Transaction History Button (Links to the next screen)
             SizedBox(

@@ -34,7 +34,7 @@ class AuthService {
           'name': name,
           'email': email,
           'role': roleString,
-          'tokens': 20, // Initial tokens for new user
+          // REMOVED: 'tokens': 20, // Initial tokens for new user
           'createdAt': Timestamp.now(),
         });
         
