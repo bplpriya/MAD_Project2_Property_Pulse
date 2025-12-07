@@ -6,8 +6,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'profile_screen.dart'; 
 import 'add_property_screen.dart';
 import 'filter_search_screen.dart'; 
-import 'property_details_screen.dart'; // Import the new screen
-import '../models/property_model.dart'; // Import the model
+import 'property_details_screen.dart'; 
+import '../models/property_model.dart'; 
+import 'wishlist_screen.dart'; // <--- WISHlist IMPORT ADDED
 
 class PropertyListingsScreen extends StatefulWidget {
   const PropertyListingsScreen({super.key});
@@ -85,14 +86,24 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
       appBar: AppBar(
         title: const Text('Property Pulse'),
         actions: [
-          // 1. Filter/Search Button
+          // 1. Wishlist Button (ADDED HERE)
+          IconButton(
+            icon: const Icon(Icons.favorite_border),
+            tooltip: 'My Wishlist',
+            onPressed: () => _navigateToScreen(
+              context, 
+              const WishlistScreen(), 
+            ),
+          ),
+          
+          // 2. Filter/Search Button
           IconButton(
             icon: const Icon(Icons.filter_list),
             tooltip: 'Filter Listings',
             onPressed: _navigateToFilterScreen,
           ),
           
-          // 2. Add Property Button
+          // 3. Add Property Button
           IconButton(
             icon: const Icon(Icons.add_home_work),
             tooltip: 'Add New Property',
@@ -102,7 +113,7 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
             ),
           ),
           
-          // 3. Profile Button
+          // 4. Profile Button
           IconButton(
             icon: const Icon(Icons.person_outline),
             onPressed: () => _navigateToScreen(
