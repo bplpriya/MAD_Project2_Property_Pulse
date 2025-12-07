@@ -1,204 +1,240 @@
-// lib/screens/filter_search_screen.dart
-
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; 
+import 'package:firebase_auth/firebase_auth.dart'; 
+import 'profile_screen.dart'; 
+import 'add_property_screen.dart';
+import 'filter_search_screen.dart'; 
 
-class FilterSearchScreen extends StatefulWidget {
-  // Callback function to return the filters back to the listings screen
-  final Function(String type, int minPrice, int maxPrice) onApplyFilters;
-  
-  // Optional: Initial filter values to pre-populate the form
-  final String initialType;
-  final int initialMinPrice;
-  final int initialMaxPrice;
-
-  const FilterSearchScreen({
-    super.key,
-    required this.onApplyFilters,
-    this.initialType = 'All',
-    this.initialMinPrice = 0,
-    this.initialMaxPrice = 9999999, // A large number representing no max
-  });
+class PropertyListingsScreen extends StatefulWidget {
+  const PropertyListingsScreen({super.key});
 
   @override
-  State<FilterSearchScreen> createState() => _FilterSearchScreenState();
+  State<PropertyListingsScreen> createState() => _PropertyListingsScreenState();
 }
 
-class _FilterSearchScreenState extends State<FilterSearchScreen> {
-  final _formKey = GlobalKey<FormState>();
-  final _minPriceController = TextEditingController();
-  final _maxPriceController = TextEditingController();
+class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
+  
+  final _firestore = FirebaseFirestore.instance;
 
-  String? _selectedType;
+  // --- FILTER STATE ---
+  String _selectedType = 'All';
+  int _minPrice = 0;
+  int _maxPrice = 9999999; 
+  // --------------------
 
-  final List<String> _propertyTypes = [
-    'All',
-    'Apartment', 
-    'House', 
-    'Condo', 
-    'Land', 
-    'Commercial'
-  ];
-
-  @override
-  void initState() {
-    super.initState();
-    // Initialize state with values passed from the calling screen
-    _selectedType = widget.initialType;
-    _minPriceController.text = widget.initialMinPrice.toString();
-    // Only set max price if it's not the massive default
-    if (widget.initialMaxPrice != 9999999) {
-      _maxPriceController.text = widget.initialMaxPrice.toString();
-    }
-  }
-
-  @override
-  void dispose() {
-    _minPriceController.dispose();
-    _maxPriceController.dispose();
-    super.dispose();
-  }
-
-  void _applyFilters() {
-    if (_formKey.currentState!.validate()) {
-      final minPrice = int.tryParse(_minPriceController.text) ?? 0;
-      // Use the large default number if the max price field is empty
-      final maxPrice = int.tryParse(_maxPriceController.text) ?? 9999999; 
-
-      if (minPrice > maxPrice) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Minimum price cannot be greater than maximum price.')),
-        );
-        return;
-      }
-
-      // Call the callback function to pass filters back to the listings screen
-      widget.onApplyFilters(_selectedType!, minPrice, maxPrice);
-      
-      // Close the filter screen
-      Navigator.pop(context);
-    }
-  }
-
-  void _resetFilters() {
-    setState(() {
-      _selectedType = 'All';
-      _minPriceController.clear();
-      _maxPriceController.clear();
-    });
-    // Call the callback with default (reset) values
-    widget.onApplyFilters('All', 0, 9999999);
-    Navigator.pop(context);
-  }
-
-  InputDecoration _inputDecoration(String label) {
-    return InputDecoration(
-      labelText: label,
-      border: const OutlineInputBorder(),
-      prefixIcon: const Icon(Icons.attach_money),
+  void _navigateToScreen(BuildContext context, Widget screen) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => screen),
     );
   }
+
+  // --- FILTER APPLICATION METHOD ---
+  void _applyFilters(String type, int minPrice, int maxPrice) {
+    setState(() {
+      _selectedType = type;
+      _minPrice = minPrice;
+      _maxPrice = maxPrice;
+    });
+  }
+
+  // --- NAVIGATION TO FILTER SCREEN ---
+  void _navigateToFilterScreen() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => FilterSearchScreen(
+          onApplyFilters: _applyFilters,
+          initialType: _selectedType,
+          initialMinPrice: _minPrice,
+          initialMaxPrice: _maxPrice,
+        ),
+      ),
+    );
+  }
+  // ----------------------------------------
+
+  // --- FIRESTORE STREAM LOGIC ---
+  Stream<QuerySnapshot> _getPropertyStream() {
+    Query query = _firestore.collection('listings');
+
+    // 1. Filter by Property Type
+    if (_selectedType != 'All') {
+      query = query.where('type', isEqualTo: _selectedType);
+    }
+    
+    // 2. Filter by Minimum Price
+    if (_minPrice > 0) {
+      query = query.where('price', isGreaterThanOrEqualTo: _minPrice);
+    }
+
+    // 3. Filter by Maximum Price 
+    if (_maxPrice < 9999999) {
+      query = query.where('price', isLessThanOrEqualTo: _maxPrice);
+    }
+
+    // 4. Order by Timestamp
+    query = query.orderBy('timestamp', descending: true);
+    
+
+    return query.snapshots();
+  }
+  // ----------------------------------------
+
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Filter Listings'),
+        title: const Text('Property Pulse'),
         actions: [
-          TextButton(
-            onPressed: _resetFilters,
-            child: const Text('Reset', style: TextStyle(color: Colors.red)),
+          // 1. Filter/Search Button (NEW)
+          IconButton(
+            icon: const Icon(Icons.filter_list),
+            tooltip: 'Filter Listings',
+            onPressed: _navigateToFilterScreen,
+          ),
+          
+          // 2. Add Property Button (Existing)
+          IconButton(
+            icon: const Icon(Icons.add_home_work),
+            tooltip: 'Add New Property',
+            onPressed: () => _navigateToScreen(
+              context, 
+              const AddPropertyScreen(), 
+            ),
+          ),
+          
+          // 3. Profile Button (Existing)
+          IconButton(
+            icon: const Icon(Icons.person_outline),
+            onPressed: () => _navigateToScreen(
+              context, 
+              const ProfileScreen(), 
+            ),
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // --- 1. Property Type Filter ---
-              Text(
-                'Filter by Property Type',
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 15),
-              DropdownButtonFormField<String>(
-                decoration: const InputDecoration(
-                  labelText: 'Property Type',
-                  border: OutlineInputBorder(),
-                  prefixIcon: Icon(Icons.category),
-                ),
-                value: _selectedType,
-                items: _propertyTypes.map((String type) {
-                  return DropdownMenuItem<String>(
-                    value: type,
-                    child: Text(type),
-                  );
-                }).toList(),
-                onChanged: (String? newValue) {
-                  setState(() {
-                    _selectedType = newValue;
-                  });
-                },
-                validator: (value) => value == null ? 'Please select a type' : null,
-              ),
-              const SizedBox(height: 30),
+      
+      body: StreamBuilder<QuerySnapshot>(
+        stream: _getPropertyStream(),
+        
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-              // --- 2. Price Range Filters ---
-              Text(
-                'Filter by Price Range',
-                style: Theme.of(context).textTheme.titleLarge,
+          if (snapshot.hasError) {
+            return Center(child: Text('Error: ${snapshot.error}'));
+          }
+
+          final propertyDocs = snapshot.data?.docs ?? [];
+
+          if (propertyDocs.isEmpty) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text(
+                      'No properties match your current filters.',
+                      style: TextStyle(fontSize: 18, color: Colors.grey),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 10),
+                    // If filters are applied, offer a reset option
+                    if (_selectedType != 'All' || _minPrice > 0 || _maxPrice < 9999999)
+                      TextButton(
+                        onPressed: () => _applyFilters('All', 0, 9999999),
+                        child: const Text('Reset Filters'),
+                      )
+                  ],
+                ),
               ),
-              const SizedBox(height: 15),
+            );
+          }
+
+          // 4. Data Display State
+          return ListView.builder(
+            itemCount: propertyDocs.length,
+            itemBuilder: (context, index) {
+              final property = propertyDocs[index].data() as Map<String, dynamic>;
               
-              TextFormField(
-                controller: _minPriceController,
-                decoration: _inputDecoration('Minimum Price'),
-                keyboardType: TextInputType.number,
-                validator: (value) {
-                  if (value != null && value.isNotEmpty && int.tryParse(value) == null) {
-                    return 'Must be a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 20),
-
-              TextFormField(
-                controller: _maxPriceController,
-                decoration: _inputDecoration('Maximum Price'),
-                keyboardType: TextInputType.number,
-                validator: (value) {
-                  if (value != null && value.isNotEmpty && int.tryParse(value) == null) {
-                    return 'Must be a valid number';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 40),
-
-              // --- Apply Button ---
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _applyFilters,
-                  icon: const Icon(Icons.filter_alt),
-                  label: const Padding(
-                    padding: EdgeInsets.symmetric(vertical: 12.0),
-                    child: Text('Apply Filters', style: TextStyle(fontSize: 18)),
+              final title = property['title'] ?? 'N/A';
+              final price = property['price']?.toString() ?? 'N/A';
+              final address = property['address'] ?? 'N/A';
+              final imageUrl = property['imageUrl'] ?? '';
+              
+              return Card(
+                margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 10),
+                elevation: 3,
+                child: ListTile(
+                  contentPadding: const EdgeInsets.all(10),
+                  
+                  leading: SizedBox(
+                    width: 80,
+                    height: 80,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: imageUrl.isNotEmpty
+                          ? Image.network(
+                              imageUrl,
+                              fit: BoxFit.cover,
+                              loadingBuilder: (context, child, loadingProgress) {
+                                if (loadingProgress == null) return child;
+                                return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                              },
+                              errorBuilder: (context, error, stackTrace) {
+                                return const Icon(Icons.image_not_supported, color: Colors.grey);
+                              },
+                            )
+                          : const Icon(Icons.house, size: 40, color: Colors.blueGrey),
+                    ),
                   ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Theme.of(context).primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    elevation: 4,
+
+                  title: Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
                   ),
+                  
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 4),
+                      Text(address, style: const TextStyle(color: Colors.grey)),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Type: ${property['type'] ?? 'N/A'}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                  
+                  trailing: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        '\$$price',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 18,
+                          color: Theme.of(context).primaryColor,
+                        ),
+                      ),
+                      const Text('Price', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                    ],
+                  ),
+                  
+                  onTap: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Viewing details for: $title')),
+                    );
+                  },
                 ),
-              ),
-            ],
-          ),
-        ),
+              );
+            },
+          );
+        },
       ),
     );
   }
