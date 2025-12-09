@@ -23,7 +23,7 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
   bool _isWishlisted = false;
   String _sellerName = 'Loading seller info...';
   bool _isFlaggedByCurrentUser = false; 
-  static const int _FLAG_THRESHOLD = 10; // New: Listing removal threshold
+  static const int _FLAG_THRESHOLD = 10; 
 
   @override
   void initState() {
@@ -215,16 +215,7 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
         title: Text(widget.property.title),
         elevation: 4, 
         actions: [
-          // Flagging Button
-          IconButton(
-            icon: Icon(
-              _isFlaggedByCurrentUser ? Icons.flag : Icons.flag_outlined,
-              color: _isFlaggedByCurrentUser ? Colors.red : Colors.grey,
-            ),
-            onPressed: _toggleFlagStatus, 
-            tooltip: _isFlaggedByCurrentUser ? 'Unflag Listing' : 'Flag Listing for Review',
-          ),
-          // Placeholder for other actions (like the Buy button, which is commented out)
+          // REMOVED FLAG BUTTON FROM APPBAR
         ],
       ),
       body: SingleChildScrollView(
@@ -305,6 +296,7 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
 
                   const SizedBox(height: 30),
                   
+                  // --- 1. Wishlist Button ---
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -328,6 +320,38 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                         side: BorderSide(
                           color: _isWishlisted ? Colors.red : Theme.of(context).primaryColor, 
+                          width: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 10), // Small spacer
+                  
+                  // --- 2. Flagging Button (New Position) ---
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _toggleFlagStatus,
+                      icon: Icon(
+                        _isFlaggedByCurrentUser ? Icons.flag : Icons.flag_outlined,
+                        color: _isFlaggedByCurrentUser ? Colors.red : Colors.grey.shade600,
+                      ),
+                      label: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12.0),
+                        child: Text(
+                          _isFlaggedByCurrentUser ? 'UNFLAG LISTING' : 'FLAG LISTING FOR REVIEW',
+                          style: TextStyle(
+                            fontSize: 16,
+                            color: _isFlaggedByCurrentUser ? Colors.red : Colors.grey.shade700,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        side: BorderSide(
+                          color: _isFlaggedByCurrentUser ? Colors.red : Colors.grey.shade400, 
                           width: 1.5,
                         ),
                       ),
