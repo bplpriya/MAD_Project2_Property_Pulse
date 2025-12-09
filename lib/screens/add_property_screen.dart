@@ -1,12 +1,22 @@
 // lib/screens/add_property_screen.dart
 
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb; 
 import 'package:flutter/material.dart';
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:image_picker/image_picker.dart'; 
+import 'package:cloud_firestore/cloud_firestore.dart'; 
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_storage/firebase_storage.dart'; // NEW
-import 'package:geolocator/geolocator.dart'; 
-import 'package:image_picker/image_picker.dart'; // NEW
-import 'dart:io'; // NEW
+import 'package:http/http.dart' as http; 
+import 'package:geolocator/geolocator.dart'; // REQUIRED for location tagging
+import '../models/property_model.dart';
+
+// --- Cloudinary Config ---
+const String CLOUDINARY_CLOUD_NAME = 'dvdfvxphf';
+const String CLOUDINARY_UPLOAD_PRESET = 'flutter_upload';
+final String CLOUDINARY_URL =
+    'https://api.cloudinary.com/v1_1/$CLOUDINARY_CLOUD_NAME/image/upload';
 
 class AddPropertyScreen extends StatefulWidget {
   const AddPropertyScreen({super.key});
@@ -17,25 +27,23 @@ class AddPropertyScreen extends StatefulWidget {
 
 class _AddPropertyScreenState extends State<AddPropertyScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _firestore = FirebaseFirestore.instance;
-  final _auth = FirebaseAuth.instance;
-  final _storage = FirebaseStorage.instance; // NEW Storage instance
 
   // Property detail controllers
   final _titleController = TextEditingController();
-  final _priceController = TextEditingController();
   final _addressController = TextEditingController();
+  final _priceController = TextEditingController(); 
   final _descriptionController = TextEditingController();
-  // REMOVED: _imageUrlController
-
-  // Location controllers
+  
+  // NEW LOCATION CONTROLLERS
   final _latitudeController = TextEditingController();
   final _longitudeController = TextEditingController();
   
-  String? _selectedType;
-  File? _selectedImage; // NEW: Holds the selected image file
-  bool _isSaving = false;
-  bool _isLocating = false;
+  String? _selectedType = 'Apartment'; 
+
+  File? _imageFile;
+  Uint8List? _webImage;
+  bool _isLoading = false;
+  bool _isLocating = false; // NEW state for GPS locator
 
   final List<String> _propertyTypes = [
     'Apartment', 
@@ -48,41 +56,15 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
   @override
   void dispose() {
     _titleController.dispose();
-    _priceController.dispose();
     _addressController.dispose();
+    _priceController.dispose();
     _descriptionController.dispose();
-    _latitudeController.dispose();
-    _longitudeController.dispose();
+    _latitudeController.dispose(); // Dispose location controllers
+    _longitudeController.dispose(); // Dispose location controllers
     super.dispose();
   }
 
-  // --- Image Picker Logic ---
-  Future<void> _pickImage() async {
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
-
-    if (pickedFile != null) {
-      setState(() {
-        _selectedImage = File(pickedFile.path);
-      });
-    }
-  }
-
-  // --- Firebase Upload Logic ---
-  Future<String?> _uploadImage(File imageFile, String propertyId) async {
-    try {
-      final ref = _storage.ref().child('property_images').child('$propertyId.jpg');
-      await ref.putFile(imageFile);
-      return await ref.getDownloadURL();
-    } on FirebaseException catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Image upload failed: ${e.message}')),
-      );
-      return null;
-    }
-  }
-
-  // --- Location Tagging Logic (Unchanged) ---
+  // --- LOCATION TAGGING LOGIC ---
   Future<void> _getCurrentLocation() async {
     setState(() {
       _isLocating = true;
@@ -99,17 +81,22 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
 
       Position position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.medium);
 
-      _latitudeController.text = position.latitude.toString();
-      _longitudeController.text = position.longitude.toString();
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location tagged successfully.')),
-      );
+      if (mounted) {
+        setState(() {
+          _latitudeController.text = position.latitude.toString();
+          _longitudeController.text = position.longitude.toString();
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Location tagged successfully.')),
+        );
+      }
 
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not get location: ${e.toString()}')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not get location: ${e.toString()}')),
+        );
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -118,100 +105,147 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
       }
     }
   }
-  
-  // --- Form Submission Logic ---
 
-  Future<void> _submitForm() async {
-    final user = _auth.currentUser;
-    if (user == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You must be logged in to add a property.')),
-      );
-      return;
+  // --- IMAGE PICKER & CLOUDINARY UPLOAD LOGIC (Unchanged) ---
+  Future<void> _pickImage() async {
+    final pickedFile = await ImagePicker().pickImage(source: ImageSource.gallery);
+    if (pickedFile == null) return;
+
+    if (kIsWeb) {
+      final bytes = await pickedFile.readAsBytes();
+      setState(() => _webImage = bytes);
+    } else {
+      setState(() => _imageFile = File(pickedFile.path));
     }
+  }
 
-    if (!_formKey.currentState!.validate() || _selectedImage == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_selectedImage == null ? 'Please select an image for the property.' : 'Please fix the form errors.')),
-      );
-      return;
-    }
-
-    setState(() {
-      _isSaving = true;
-    });
-
-    String? imageUrl;
+  Future<String?> _uploadImageToCloudinary() async {
+    if (_imageFile == null && _webImage == null) return null;
     
     try {
-      // 1. Create a document reference first to get a unique ID
-      final newDocRef = _firestore.collection('listings').doc();
-      final propertyId = newDocRef.id;
+      final request = http.MultipartRequest('POST', Uri.parse(CLOUDINARY_URL));
+      request.fields['upload_preset'] = CLOUDINARY_UPLOAD_PRESET;
 
-      // 2. Upload image and get URL
-      imageUrl = await _uploadImage(_selectedImage!, propertyId);
+      if (kIsWeb && _webImage != null) {
+        request.files.add(
+          http.MultipartFile.fromBytes(
+            'file',
+            _webImage!,
+            filename: 'upload_${DateTime.now().millisecondsSinceEpoch}.jpg',
+          ),
+        );
+      } else if (!kIsWeb && _imageFile != null) {
+        request.files.add(await http.MultipartFile.fromPath('file', _imageFile!.path));
+      } else {
+        return null;
+      }
 
+      final streamedResponse = await request.send();
+      final response = await http.Response.fromStream(streamedResponse);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return data['secure_url'];
+      } else {
+        print('Cloudinary Error: ${response.statusCode} - ${response.body}'); 
+        return null;
+      }
+    } catch (e) {
+      print('Upload Error: $e');
+      return null;
+    }
+  }
+
+  // --- SUBMISSION LOGIC (Updated to include location) ---
+  void _submitProperty() async {
+    if (_imageFile == null && _webImage == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please upload a property image.')),
+      );
+      return;
+    }
+
+    if (!_formKey.currentState!.validate()) return;
+
+    setState(() => _isLoading = true);
+
+    try {
+      // 1. Upload image
+      final imageUrl = await _uploadImageToCloudinary();
       if (imageUrl == null) {
-        throw Exception("Failed to get image URL after upload.");
+        throw Exception('Failed to upload image to Cloudinary.');
       }
       
-      // 3. Save property data with the new URL
-      final propertyData = {
-        'title': _titleController.text,
-        'price': int.parse(_priceController.text),
-        'type': _selectedType,
-        'address': _addressController.text,
-        'description': _descriptionController.text,
-        'imageUrl': imageUrl, // Using uploaded URL
-        'sellerId': user.uid,
-        'timestamp': FieldValue.serverTimestamp(),
-        'latitude': double.tryParse(_latitudeController.text), 
-        'longitude': double.tryParse(_longitudeController.text),
+      // 2. Safely parse location fields (Handle empty string to null conversion)
+      final double? parsedLat = _latitudeController.text.trim().isEmpty 
+          ? null 
+          : double.tryParse(_latitudeController.text);
+          
+      final double? parsedLng = _longitudeController.text.trim().isEmpty 
+          ? null 
+          : double.tryParse(_longitudeController.text);
+
+      // 3. Create model and submit to Firestore
+      // NOTE: We assume PropertyModel.toMap() handles the null/default fields (isRemoved, flagCount)
+      final newPropertyData = {
+        'id': '',
+        'title': _titleController.text.trim(),
+        'address': _addressController.text.trim(),
+        'type': _selectedType!,
+        'price': int.tryParse(_priceController.text.trim()) ?? 0, 
+        'description': _descriptionController.text.trim(),
+        'imageUrl': imageUrl, 
+        'sellerId': FirebaseAuth.instance.currentUser?.uid ?? '',
+        'timestamp': Timestamp.now(),
+        // ADDED LOCATION DATA
+        'latitude': parsedLat, 
+        'longitude': parsedLng,
         'isRemoved': false,
         'flagCount': 0,
       };
 
-      await newDocRef.set(propertyData);
+      await FirebaseFirestore.instance.collection('listings').add(newPropertyData);
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Property added successfully!')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${_titleController.text} listed successfully!'),
+            backgroundColor: Colors.green,
+          ),
+        );
+        
+        Navigator.of(context).pop();
+      }
 
-      Navigator.of(context).pop();
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to add property: ${e.toString()}')),
-      );
+      // Log the error for debugging
+      print('SUBMISSION FAILED: $e'); 
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save property: ${e.toString()}')),
+        );
+      }
     } finally {
       if (mounted) {
-        setState(() {
-          _isSaving = false;
-        });
+        setState(() => _isLoading = false);
       }
     }
   }
 
-  // --- UI Builder Methods (Unchanged except for Image URL field replacement) ---
+  // --- UI Builder Methods ---
 
-  InputDecoration _inputDecoration(String label, {IconData? icon}) {
-    final primaryColor = Theme.of(context).colorScheme.primary;
+  InputDecoration _customInputDecoration(String label, {IconData? icon}) {
     return InputDecoration(
       labelText: label,
-      labelStyle: TextStyle(color: Colors.grey.shade600),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.grey.shade300, width: 1),
+      border: const OutlineInputBorder(
+        borderRadius: BorderRadius.all(Radius.circular(10)), 
+        borderSide: BorderSide.none,
       ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: Colors.grey.shade300, width: 1),
-      ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: BorderSide(color: primaryColor, width: 2),
-      ),
-      prefixIcon: icon != null ? Icon(icon, color: primaryColor) : null,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      filled: true,
+      fillColor: Colors.white,
+      contentPadding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+      labelStyle: const TextStyle(color: Colors.black54),
+      prefixIcon: icon != null ? Icon(icon, color: Theme.of(context).colorScheme.primary) : null,
     );
   }
 
@@ -221,118 +255,123 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Add New Property', style: TextStyle(fontWeight: FontWeight.w800)),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
+        title: const Text("Add New Property Listing"),
         elevation: 0,
-        bottom: PreferredSize(preferredSize: const Size.fromHeight(1.0), child: Container(color: Colors.grey.shade200, height: 1.0)),
+        backgroundColor: Colors.white,
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.all(16.0),
         child: Form(
           key: _formKey,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              // --- Property Details ---
+            children: [
+              // --- Property Details Fields ---
               TextFormField(
                 controller: _titleController,
-                decoration: _inputDecoration('Title', icon: Icons.title),
+                decoration: _customInputDecoration('Listing Title', icon: Icons.title),
                 validator: (value) => value!.isEmpty ? 'Please enter a title' : null,
               ),
-              const SizedBox(height: 16),
-              
-              TextFormField(
-                controller: _priceController,
-                decoration: _inputDecoration('Price', icon: Icons.attach_money),
-                keyboardType: TextInputType.number,
-                validator: (value) => value!.isEmpty || int.tryParse(value) == null ? 'Enter a valid price' : null,
-              ),
-              const SizedBox(height: 16),
-              
+              const SizedBox(height: 20),
+
               DropdownButtonFormField<String>(
+                decoration: _customInputDecoration('Property Type', icon: Icons.category),
                 value: _selectedType,
-                decoration: _inputDecoration('Property Type', icon: Icons.category),
-                items: _propertyTypes.map((type) => DropdownMenuItem(value: type, child: Text(type))).toList(),
-                onChanged: (value) => setState(() => _selectedType = value),
+                items: _propertyTypes.map((String type) {
+                  return DropdownMenuItem<String>(value: type, child: Text(type));
+                }).toList(),
+                onChanged: (String? newValue) {
+                  setState(() => _selectedType = newValue);
+                },
                 validator: (value) => value == null ? 'Please select a type' : null,
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
 
               TextFormField(
                 controller: _addressController,
-                decoration: _inputDecoration('Address / Location', icon: Icons.location_city),
+                decoration: _customInputDecoration('Full Address', icon: Icons.location_on_outlined),
                 validator: (value) => value!.isEmpty ? 'Please enter the address' : null,
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
+
+              TextFormField(
+                controller: _priceController,
+                decoration: _customInputDecoration('Price', icon: Icons.monetization_on),
+                keyboardType: TextInputType.number,
+                validator: (value) {
+                  if (value!.isEmpty) return 'Please enter a price';
+                  if (int.tryParse(value) == null || int.parse(value)! <= 0) return 'Price must be a valid positive number';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 20),
 
               TextFormField(
                 controller: _descriptionController,
-                decoration: _inputDecoration('Description', icon: Icons.description),
+                decoration: _customInputDecoration('Description', icon: Icons.description),
                 maxLines: 4,
                 validator: (value) => value!.isEmpty ? 'Please enter a description' : null,
               ),
+              
               const SizedBox(height: 30),
+              const Divider(color: Colors.black12),
+              const SizedBox(height: 20),
+
+              // --- Image Section ---
+              Text('Property Image', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: primaryColor)),
+              const SizedBox(height: 15),
               
-              // --- Image Upload Section (Replaced URL Field) ---
-              Text(
-                'Property Image',
-                style: Theme.of(context).textTheme.titleLarge!.copyWith(fontWeight: FontWeight.bold),
-              ),
-              const Divider(),
-              
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: _pickImage,
-                  icon: const Icon(Icons.photo_library),
-                  label: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 14.0),
-                    child: Text(_selectedImage == null ? 'Select Image from Gallery' : 'Image Selected (Change)',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)
+              Center(
+                child: Column(
+                  children: [
+                    Container(
+                      height: 150,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade300, width: 2),
+                        borderRadius: BorderRadius.circular(10),
+                        color: Colors.white,
+                      ),
+                      child: (_imageFile == null && _webImage == null)
+                          ? const Center(child: Text('No image selected.', style: TextStyle(color: Colors.grey)))
+                          : ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: kIsWeb
+                                  ? Image.memory(_webImage!, fit: BoxFit.cover)
+                                  : Image.file(_imageFile!, fit: BoxFit.cover),
+                            ),
                     ),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    side: BorderSide(
-                      color: _selectedImage != null ? Colors.green : primaryColor, 
-                      width: 1.5
-                    ),
-                    foregroundColor: _selectedImage != null ? Colors.green : primaryColor,
-                  ),
-                ),
-              ),
-              
-              if (_selectedImage != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 16.0),
-                  child: Center(
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        _selectedImage!,
-                        height: 200,
-                        fit: BoxFit.cover,
+                    const SizedBox(height: 15),
+                    ElevatedButton.icon(
+                      onPressed: _pickImage,
+                      icon: const Icon(Icons.camera_alt),
+                      label: Text((_imageFile != null || _webImage != null) ? 'Change Image' : 'Upload Image'),
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 20),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        backgroundColor: primaryColor,
+                        foregroundColor: Colors.white,
                       ),
                     ),
-                  ),
+                  ],
                 ),
-              const SizedBox(height: 30),
-
-              // --- Location Tagging Section (Unchanged) ---
-              Text(
-                'Location',
-                style: Theme.of(context).textTheme.titleLarge!.copyWith(fontWeight: FontWeight.bold),
               ),
-              const Divider(),
               
+              const SizedBox(height: 40),
+              const Divider(color: Colors.black12),
+              const SizedBox(height: 20),
+
+              // --- Location Tagging Section ---
+              Text('Location', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: primaryColor)),
+              const SizedBox(height: 15),
+
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: TextFormField(
                       controller: _latitudeController,
-                      decoration: _inputDecoration('Latitude', icon: Icons.pin_drop),
+                      decoration: _customInputDecoration('Latitude', icon: Icons.pin_drop),
                       keyboardType: TextInputType.number,
                       validator: (value) => value!.isNotEmpty && double.tryParse(value) == null ? 'Valid number needed' : null,
                     ),
@@ -342,7 +381,7 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
                   Expanded(
                     child: TextFormField(
                       controller: _longitudeController,
-                      decoration: _inputDecoration('Longitude', icon: Icons.pin_drop),
+                      decoration: _customInputDecoration('Longitude', icon: Icons.pin_drop),
                       keyboardType: TextInputType.number,
                       validator: (value) => value!.isNotEmpty && double.tryParse(value) == null ? 'Valid number needed' : null,
                     ),
@@ -353,10 +392,10 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
               
               SizedBox(
                 width: double.infinity,
-                child: OutlinedButton.icon(
+                child: ElevatedButton.icon(
                   onPressed: _isLocating ? null : _getCurrentLocation,
                   icon: _isLocating 
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                       : const Icon(Icons.my_location),
                   label: Padding(
                     padding: const EdgeInsets.symmetric(vertical: 14.0),
@@ -364,35 +403,36 @@ class _AddPropertyScreenState extends State<AddPropertyScreen> {
                       style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)
                     ),
                   ),
-                  style: OutlinedButton.styleFrom(
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    side: BorderSide(color: primaryColor, width: 1.5),
+                  style: ElevatedButton.styleFrom(
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    backgroundColor: Colors.blueGrey,
+                    foregroundColor: Colors.white,
                   ),
                 ),
               ),
 
               const SizedBox(height: 40),
-
+              
               // --- Submit Button ---
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  onPressed: _isSaving ? null : _submitForm,
-                  icon: _isSaving ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) : const Icon(Icons.add_home),
-                  label: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16.0),
-                    child: Text(
-                      _isSaving ? 'Adding Property...' : 'Add Property', 
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: primaryColor,
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    elevation: 4,
-                  ),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _submitProperty,
+                style: ElevatedButton.styleFrom(
+                  minimumSize: const Size(double.infinity, 50),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  backgroundColor: Colors.green.shade600, 
+                  foregroundColor: Colors.white, 
+                  elevation: 2,
                 ),
+                child: _isLoading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                      )
+                    : const Text(
+                        'Submit Listing',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
               ),
             ],
           ),
