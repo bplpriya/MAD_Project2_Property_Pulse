@@ -16,14 +16,14 @@ class FilterSearchScreen extends StatefulWidget {
     required this.onApplyFilters,
     this.initialType = 'All',
     this.initialMinPrice = 0,
-    this.initialMaxPrice = 9999999, // A large number representing no max
+    this.initialMaxPrice = 999999999, // A large number representing no max
   });
 
   @override
-  State<FilterSearchScreen> createState() => _FilterSearchState(); // <--- RENAMED STATE CLASS HERE
+  State<FilterSearchScreen> createState() => _FilterSearchState();
 }
 
-class _FilterSearchState extends State<FilterSearchScreen> { // <--- RENAMED STATE CLASS HERE
+class _FilterSearchState extends State<FilterSearchScreen> {
   final _formKey = GlobalKey<FormState>();
   final _minPriceController = TextEditingController();
   final _maxPriceController = TextEditingController();
@@ -45,9 +45,8 @@ class _FilterSearchState extends State<FilterSearchScreen> { // <--- RENAMED STA
     _selectedType = widget.initialType;
     _minPriceController.text = widget.initialMinPrice.toString();
     
-    if (widget.initialMaxPrice != 9999999) {
-      _maxPriceController.text = widget.initialMaxPrice.toString();
-    }
+    // FIX APPLIED: Removed conditional check to always display the max price value.
+    _maxPriceController.text = widget.initialMaxPrice.toString();
   }
 
   @override
@@ -61,8 +60,8 @@ class _FilterSearchState extends State<FilterSearchScreen> { // <--- RENAMED STA
     if (_formKey.currentState!.validate()) {
       final minPrice = int.tryParse(_minPriceController.text) ?? 0;
       final maxPrice = _maxPriceController.text.isEmpty
-          ? 9999999
-          : int.tryParse(_maxPriceController.text) ?? 9999999; 
+          ? 999999999
+          : int.tryParse(_maxPriceController.text) ?? 999999999; 
 
       if (minPrice > maxPrice) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -71,7 +70,8 @@ class _FilterSearchState extends State<FilterSearchScreen> { // <--- RENAMED STA
         return;
       }
 
-      widget.onApplyFilters(_selectedType!, minPrice, maxPrice);
+      // Using ?? 'All' for null safety on _selectedType
+      widget.onApplyFilters(_selectedType ?? 'All', minPrice, maxPrice);
       
       Navigator.pop(context);
     }
@@ -83,7 +83,7 @@ class _FilterSearchState extends State<FilterSearchScreen> { // <--- RENAMED STA
       _minPriceController.clear();
       _maxPriceController.clear();
     });
-    widget.onApplyFilters('All', 0, 9999999);
+    widget.onApplyFilters('All', 0, 999999999);
     Navigator.pop(context);
   }
 
@@ -123,7 +123,7 @@ class _FilterSearchState extends State<FilterSearchScreen> { // <--- RENAMED STA
               DropdownButtonFormField<String>(
                 decoration: const InputDecoration(
                   labelText: 'Property Type',
-                  border: OutlineInputBorder(),
+                  border: OutlineInputBorder(), // Removed redundant const
                   prefixIcon: Icon(Icons.category),
                 ),
                 value: _selectedType,

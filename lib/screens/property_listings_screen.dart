@@ -24,7 +24,7 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
 
   String _selectedType = 'All';
   int _minPrice = 0;
-  int _maxPrice = 9999999; 
+  int _maxPrice = 999999999; // UPDATED DEFAULT MAX PRICE
 
   void _navigateToScreen(BuildContext context, Widget screen) {
     Navigator.of(context).push(
@@ -53,22 +53,33 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
     );
   }
 
+  // MODIFIED: Simplified Query for Firestore
   Stream<QuerySnapshot> _getPropertyStream() {
     Query query = _firestore.collection('listings');
 
-    if (_selectedType != 'All') {
-      query = query.where('type', isEqualTo: _selectedType);
-    }
+    // Check if a price inequality filter is active
+    bool isPriceFilterActive = _minPrice > 0 || _maxPrice < 999999999; // UPDATED DEFAULT MAX PRICE
+
+    // We DO NOT filter by Property Type here (Client-side filtering below handles this)
     
+    // 1. Filter by Price Range (Inequality Filters)
     if (_minPrice > 0) {
+      // Must be the first inequality or orderBy field
       query = query.where('price', isGreaterThanOrEqualTo: _minPrice);
     }
 
-    if (_maxPrice < 9999999) {
+    if (_maxPrice < 999999999) { // UPDATED DEFAULT MAX PRICE
       query = query.where('price', isLessThanOrEqualTo: _maxPrice);
     }
 
-    query = query.orderBy('timestamp', descending: true);
+    // 2. APPLY ORDERING: Simplified Logic
+    if (isPriceFilterActive) {
+      // Must order by price when price inequality filter is present (Firestore rule)
+      query = query.orderBy('price', descending: false); 
+    } else {
+      // If ONLY price filter is not active, we can order by timestamp.
+      query = query.orderBy('timestamp', descending: true);
+    }
     
     return query.snapshots();
   }
@@ -134,8 +145,19 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
           }
 
           final propertyDocs = snapshot.data?.docs ?? [];
+          
+          // Client-Side filtering by property type
+          List<PropertyModel> filteredProperties = propertyDocs
+            .map((doc) => PropertyModel.fromDocument(doc))
+            .where((property) {
+              // Apply the Type filter ONLY here (client-side)
+              if (_selectedType == 'All') {
+                return true;
+              }
+              return property.type == _selectedType;
+            }).toList();
 
-          if (propertyDocs.isEmpty) {
+          if (filteredProperties.isEmpty) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(20.0),
@@ -148,9 +170,9 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 10),
-                    if (_selectedType != 'All' || _minPrice > 0 || _maxPrice < 9999999)
+                    if (_selectedType != 'All' || _minPrice > 0 || _maxPrice < 999999999) // UPDATED DEFAULT MAX PRICE
                       TextButton(
-                        onPressed: () => _applyFilters('All', 0, 9999999),
+                        onPressed: () => _applyFilters('All', 0, 999999999), // UPDATED DEFAULT MAX PRICE
                         child: const Text('Reset Filters'),
                       )
                   ],
@@ -160,10 +182,10 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
           }
 
           return ListView.builder(
-            itemCount: propertyDocs.length,
+            itemCount: filteredProperties.length, // Use the new filtered list
             itemBuilder: (context, index) {
               
-              final property = PropertyModel.fromDocument(propertyDocs[index]); 
+              final property = filteredProperties[index]; // Use the filtered model
               
               final title = property.title;
               final price = property.price.toString();
