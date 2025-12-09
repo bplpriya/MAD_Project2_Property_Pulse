@@ -13,79 +13,150 @@ class PropertyComparisonScreen extends StatefulWidget {
 
 class _PropertyComparisonScreenState extends State<PropertyComparisonScreen> {
   final _firestore = FirebaseFirestore.instance;
-  final List<TextEditingController> _idControllers = [
-    TextEditingController(),
-    TextEditingController(),
-    TextEditingController(),
-  ];
-
-  List<PropertyModel?> _properties = [null, null, null];
-  bool _isLoading = false;
+  
+  List<PropertyModel> _availableProperties = [];
+  List<PropertyModel> _selectedProperties = [];
+  bool _isLoading = true; 
 
   @override
-  void dispose() {
-    for (var controller in _idControllers) {
-      controller.dispose();
-    }
-    super.dispose();
+  void initState() {
+    super.initState();
+    _loadAvailableProperties();
   }
-
-  Future<void> _fetchProperties() async {
-    setState(() {
-      _isLoading = true;
-      _properties = [null, null, null];
-    });
-
-    List<String> idsToFetch = _idControllers
-        .map((c) => c.text.trim())
-        .where((id) => id.isNotEmpty)
-        .toList();
-
-    if (idsToFetch.isEmpty) {
+  
+  Future<void> _loadAvailableProperties() async {
+    try {
+      final snapshot = await _firestore.collection('listings').orderBy('timestamp', descending: true).get();
+      
+      final loadedProperties = snapshot.docs
+          .map((doc) => PropertyModel.fromDocument(doc))
+          .toList();
+          
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Please enter at least one property ID.')),
-        );
+        setState(() {
+          _availableProperties = loadedProperties;
+          _isLoading = false;
+        });
       }
-      setState(() => _isLoading = false);
-      return;
-    }
-
-    List<Future<PropertyModel?>> fetchFutures = idsToFetch.map((id) async {
-      try {
-        final doc = await _firestore.collection('listings').doc(id).get();
-        if (doc.exists) {
-          return PropertyModel.fromDocument(doc);
-        }
-      } catch (e) {
-        print('Error fetching property $id: $e');
+    } catch (e) {
+      print('Error loading properties for comparison: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
       }
-      return null;
-    }).toList();
-
-    List<PropertyModel?> fetched = await Future.wait(fetchFutures);
-    
-    List<PropertyModel?> updatedProperties = [null, null, null];
-    for (int i = 0; i < fetched.length && i < 3; i++) {
-      updatedProperties[i] = fetched[i];
-    }
-    
-    if (mounted) {
-      setState(() {
-        _properties = updatedProperties;
-        _isLoading = false;
-      });
     }
   }
 
-  Widget _buildPropertyInput(int index) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: TextField(
-        controller: _idControllers[index],
-        decoration: InputDecoration(
-          labelText: 'Property ${index + 1} ID',
-          border: const OutlineInputBorder(),
+  void _startComparison() {
+    if (_selectedProperties.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select at least one property to compare.')),
+      );
+    }
+  }
+  
+  void _togglePropertySelection(PropertyModel property, bool isSelected) {
+    setState(() {
+      if (isSelected) {
+        if (_selectedProperties.length < 3) {
+          _selectedProperties.add(property);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Maximum of 3 properties can be selected for comparison.')),
+          );
+        }
+      } else {
+        _selectedProperties.removeWhere((p) => p.id == property.id);
+      }
+    });
+  }
+
+
+  Widget _buildPropertySelectionList() {
+    if (_isLoading) {
+      return const Center(child: Padding(
+        padding: EdgeInsets.all(30.0),
+        child: CircularProgressIndicator(),
+      ));
+    }
+    
+    if (_availableProperties.isEmpty) {
+      return const Center(child: Padding(
+        padding: EdgeInsets.all(30.0),
+        child: Text('No properties available to compare.'),
+      ));
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Select up to 3 properties (${_selectedProperties.length}/3):',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 10),
+        
+        // Constrain the list height to prevent infinite sizing conflict
+        Container(
+          constraints: BoxConstraints(
+            // Set max height to 45% of the screen height
+            maxHeight: MediaQuery.of(context).size.height * 0.45, 
+          ),
+          child: ListView.builder(
+            // Use ListView.builder to handle the list efficiently
+            shrinkWrap: true,
+            // Use clamping physics to handle nested scrolling properly
+            physics: const ClampingScrollPhysics(), 
+            itemCount: _availableProperties.length,
+            itemBuilder: (context, index) {
+              final property = _availableProperties[index];
+              final isSelected = _selectedProperties.contains(property);
+              
+              return CheckboxListTile(
+                title: Text(property.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text('\$${property.price} - ${property.address}', maxLines: 1, overflow: TextOverflow.ellipsis),
+                value: isSelected,
+                onChanged: (bool? value) {
+                  if (value != null) {
+                    _togglePropertySelection(property, value);
+                  }
+                },
+                enabled: isSelected || _selectedProperties.length < 3,
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
+  // NEW: Dedicated cell builder for images
+  Widget _buildImageCell(String? imageUrl, Color color) {
+    const double size = 60.0;
+    
+    return Container(
+      width: 150,
+      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+      decoration: BoxDecoration(
+        border: Border(right: BorderSide(color: Colors.grey.shade200)),
+        color: color,
+      ),
+      child: Center(
+        child: SizedBox(
+          width: size,
+          height: size,
+          child: imageUrl != null && imageUrl.isNotEmpty
+              ? ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.network(
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => 
+                        const Icon(Icons.broken_image, size: 30, color: Colors.grey),
+                  ),
+                )
+              : const Icon(Icons.house, size: 30, color: Colors.blueGrey),
         ),
       ),
     );
@@ -125,7 +196,7 @@ class _PropertyComparisonScreenState extends State<PropertyComparisonScreen> {
 
   Widget _buildPropertyRow(String label, List<String?> values, Color color) {
     return Row(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Container(
           width: 120,
@@ -144,9 +215,32 @@ class _PropertyComparisonScreenState extends State<PropertyComparisonScreen> {
     );
   }
 
+  // NEW: Dedicated row builder for images
+  Widget _buildImageRow(List<String?> imageUrls, Color color) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          width: 120,
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
+          decoration: BoxDecoration(
+            color: color,
+            border: Border(right: BorderSide(color: Colors.grey.shade300)),
+          ),
+          child: const Text(
+            'Image',
+            style: TextStyle(fontWeight: FontWeight.bold),
+          ),
+        ),
+        ...imageUrls.map((url) => _buildImageCell(url, Colors.white)).toList(),
+      ],
+    );
+  }
+
+
   @override
   Widget build(BuildContext context) {
-    List<PropertyModel?> validProperties = _properties.where((p) => p != null).toList();
+    List<PropertyModel?> validProperties = _selectedProperties.where((p) => p != null).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -158,48 +252,15 @@ class _PropertyComparisonScreenState extends State<PropertyComparisonScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Enter up to 3 Listing IDs to compare:',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            const SizedBox(height: 10),
-            ...List.generate(3, (index) => _buildPropertyInput(index)),
-
-            const SizedBox(height: 20),
+            // --- Selection List ---
+            _buildPropertySelectionList(),
             
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: _isLoading ? null : _fetchProperties,
-                icon: _isLoading ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)) : const Icon(Icons.compare),
-                label: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 12.0),
-                  child: Text(_isLoading ? 'Loading...' : 'Compare Properties', style: const TextStyle(fontSize: 18)),
-                ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Theme.of(context).primaryColor,
-                  foregroundColor: Colors.white,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ),
+            const SizedBox(height: 20),
 
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.only(top: 10.0),
-                child: Text(
-                  'Tip: Listing IDs can be found in the "Contact Information" section of the Property Details Page.',
-                  style: TextStyle(color: Colors.grey[600], fontStyle: FontStyle.italic),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 30),
-
+            // --- Comparison Output Table ---
             if (validProperties.isNotEmpty)
               Text(
-                'Comparison Results:',
+                'Comparison Results (${validProperties.length} selected):',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
             if (validProperties.isNotEmpty)
@@ -210,34 +271,42 @@ class _PropertyComparisonScreenState extends State<PropertyComparisonScreen> {
                 scrollDirection: Axis.horizontal,
                 child: Column(
                   children: [
+                    // Header Row (Titles)
                     Row(
                       children: [
-                        Container(width: 120, padding: const EdgeInsets.all(8), color: Colors.grey.shade100, child: const Text('Feature', style: TextStyle(fontWeight: FontWeight.bold))),
+                        Container(width: 120, padding: const EdgeInsets.all(8), color: Colors.grey.shade100, child: const Text('Feature', style: const TextStyle(fontWeight: FontWeight.bold))),
+                        // Map over selected properties for the header
                         ...validProperties.map((p) => _buildComparisonCell(
                           '', 
                           p!.title, 
                           Theme.of(context).colorScheme.primary.withOpacity(0.1)
                         )).toList(),
+                        // Fill remaining columns with empty placeholders
                         ...List.generate(3 - validProperties.length, (index) => Container(width: 150, padding: const EdgeInsets.all(8), color: Colors.grey.shade100, child: const Text(''))),
                       ],
                     ),
                     const Divider(height: 0),
                     
-                    _buildPropertyRow('Price', validProperties.map((p) => '\$${p!.price}').toList(), Colors.white),
-                    _buildPropertyRow('Type', validProperties.map((p) => p!.type).toList(), Colors.grey.shade50),
-                    _buildPropertyRow('Address', validProperties.map((p) => p!.address).toList(), Colors.white),
-                    _buildPropertyRow('Description', validProperties.map((p) => p!.description).toList(), Colors.grey.shade50),
-                    _buildPropertyRow('Seller ID', validProperties.map((p) => p!.sellerId).toList(), Colors.white),
-                    _buildPropertyRow('Listing Date', validProperties.map((p) => p!.timestamp.toDate().toString().split(' ')[0]).toList(), Colors.grey.shade50),
+                    // NEW ROW: Image
+                    _buildImageRow(validProperties.map((p) => p!.imageUrl).toList(), Colors.grey.shade50), 
+
+                    // Comparison Rows (rest of the data)
+                    _buildPropertyRow('Listing ID', validProperties.map((p) => p!.id).toList(), Colors.white), 
+                    _buildPropertyRow('Price', validProperties.map((p) => '\$${p!.price}').toList(), Colors.grey.shade50),
+                    _buildPropertyRow('Type', validProperties.map((p) => p!.type).toList(), Colors.white),
+                    _buildPropertyRow('Address', validProperties.map((p) => p!.address).toList(), Colors.grey.shade50),
+                    _buildPropertyRow('Description', validProperties.map((p) => p!.description).toList(), Colors.white),
+                    _buildPropertyRow('Seller ID', validProperties.map((p) => p!.sellerId).toList(), Colors.grey.shade50),
+                    _buildPropertyRow('Listing Date', validProperties.map((p) => p!.timestamp.toDate().toString().split(' ')[0]).toList(), Colors.white),
                   ],
                 ),
               ),
 
-            if (validProperties.isEmpty && !_isLoading)
+            if (_selectedProperties.isEmpty && !_isLoading && _availableProperties.isNotEmpty)
               const Center(
                 child: Padding(
                   padding: EdgeInsets.only(top: 50.0),
-                  child: Text('No properties loaded for comparison. Enter IDs above and click Compare.'),
+                  child: Text('Select properties from the list above to view the comparison table.'),
                 ),
               ),
           ],
