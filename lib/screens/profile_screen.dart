@@ -17,7 +17,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   final _auth = FirebaseAuth.instance;
   final _firestore = FirebaseFirestore.instance;
   final AuthService _authService = AuthService();
-  // REMOVED: int tokens = 0;
+  
   String name = 'Loading...';
   String role = '';
 
@@ -30,14 +30,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Future<void> _loadUserData() async {
     final user = _auth.currentUser;
     if (user != null) {
-      // Fetch user data from the 'users' collection
-      final doc = await _firestore.collection('users').doc(user.uid).get();
-      final data = doc.data();
-      setState(() {
-        // REMOVED: tokens = data?['tokens'] ?? 1000; 
-        name = data?['name'] ?? user.email ?? 'User';
-        role = data?['role'] ?? 'Unknown';
-      });
+      try {
+        // Fetch user data from the 'users' collection
+        final doc = await _firestore.collection('users').doc(user.uid).get();
+        
+        if (doc.exists) {
+          final data = doc.data();
+          final fetchedName = data?['name'] as String?;
+          final fetchedRole = data?['role'] as String?;
+
+          // Debugging print to confirm what was fetched
+          print('Firestore fetched name: $fetchedName'); 
+
+          if (mounted) {
+            setState(() {
+              // Use the fetched name, fall back to email, then 'User'
+              name = fetchedName ?? user.email ?? 'User';
+              role = fetchedRole ?? 'Unknown';
+            });
+          }
+        } else {
+           if (mounted) {
+            setState(() {
+              name = user.email ?? 'User Profile Not Found';
+              role = 'Unknown';
+            });
+          }
+        }
+      } catch (e) {
+        print('Error loading user data: $e');
+         if (mounted) {
+          setState(() {
+            name = 'Error fetching data';
+            role = 'Error';
+          });
+        }
+      }
     }
   }
 
@@ -89,27 +117,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
             const SizedBox(height: 30),
 
-            // REMOVED: Token Display Card
-            // Card(
-            //   elevation: 4,
-            //   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
-            //   child: Padding(
-            //     padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 25),
-            //     child: Row(
-            //       mainAxisAlignment: MainAxisAlignment.center,
-            //       mainAxisSize: MainAxisSize.min,
-            //       children: [
-            //         Icon(Icons.monetization_on, color: Colors.amber.shade700, size: 30),
-            //         const SizedBox(width: 10),
-            //         Text(
-            //           'Tokens: $tokens', 
-            //           style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-            //       ],
-            //     ),
-            //   ),
-            // ),
-            // const SizedBox(height: 30),
-            
             // Transaction History Button (Links to the next screen)
             SizedBox(
               width: double.infinity,

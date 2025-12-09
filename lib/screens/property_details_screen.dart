@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; 
 import 'package:firebase_auth/firebase_auth.dart'; 
 import '../models/property_model.dart';
-import 'tour_scheduling_screen.dart'; // Import the tour scheduling screen
+import 'tour_scheduling_screen.dart'; 
 
 class PropertyDetailsScreen extends StatefulWidget {
   final PropertyModel property;
@@ -18,427 +18,486 @@ class PropertyDetailsScreen extends StatefulWidget {
 
 class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
   final _firestore = FirebaseFirestore.instance;
-  // Use a getter for a consistent check of the current user ID
-  String? get _userId => FirebaseAuth.instance.currentUser?.uid;
+  // Get the current user ID
+  String? get _userId => FirebaseAuth.instance.currentUser?.uid; 
   
   bool _isWishlisted = false;
   String _sellerName = 'Loading seller info...';
+  
+  // Flagging State Variables
   bool _isFlaggedByCurrentUser = false; 
-  static const int _FLAG_THRESHOLD = 10; 
+  int _currentFlagCount = 0; 
+  static const int _FLAG_THRESHOLD = 5; // Reduced for easier testing
+  bool _isFlagging = false;
 
   @override
   void initState() {
     super.initState();
-    _checkWishlistStatus();
-    _fetchSellerInfo();
-    _checkFlagStatus(); 
+    // Only proceed if user is logged in
+    if (_userId != null) {
+      _checkWishlistStatus();
+      _checkFlagStatus(); 
+    }
+    _fetchSellerInfo(); // Fetch seller info regardless of current user's login status
   }
+  
+  // --- Data Fetching Methods ---
 
+  // 1. Fetch Seller Name (FIXED: ensures 'name' is retrieved)
   Future<void> _fetchSellerInfo() async {
     try {
-      final sellerDoc = await _firestore
-          .collection('users')
-          .doc(widget.property.sellerId)
-          .get();
-      
-      if (sellerDoc.exists && mounted) {
+      final doc = await _firestore.collection('users').doc(widget.property.sellerId).get();
+      final data = doc.data();
+      if (mounted) {
         setState(() {
-          _sellerName = sellerDoc.data()?['name'] ?? 'Seller Not Found';
-        });
-      } else if (mounted) {
-        setState(() {
-          _sellerName = 'Seller Not Found';
+          // Attempt to retrieve the 'name' field from the user document
+          _sellerName = data?['name'] ?? 'Unknown Seller';
         });
       }
     } catch (e) {
+      print('Error fetching seller info: $e');
       if (mounted) {
         setState(() {
-          _sellerName = 'Error loading seller';
+          _sellerName = 'Error loading name';
         });
       }
     }
   }
 
-  Future<void> _checkWishlistStatus() async {
-    if (_userId == null) return;
-
-    final docRef = _firestore
-        .collection('users')
-        .doc(_userId)
-        .collection('wishlist')
-        .doc(widget.property.id);
-
-    final doc = await docRef.get();
-    
-    if (mounted) {
-      setState(() {
-        _isWishlisted = doc.exists;
-      });
-    }
-  }
-  
-  // --- Flagging Logic ---
-
+  // 2. Check Property Flag Status
   Future<void> _checkFlagStatus() async {
     if (_userId == null) return;
 
-    final flagDocRef = _firestore
-        .collection('listings')
-        .doc(widget.property.id)
-        .collection('flags')
-        .doc(_userId);
-
-    final doc = await flagDocRef.get();
-    
-    if (mounted) {
-      setState(() {
-        _isFlaggedByCurrentUser = doc.exists;
+    try {
+      final propertyDoc = _firestore.collection('listings').doc(widget.property.id);
+      
+      // Listen to the total flag count on the property document
+      propertyDoc.snapshots().listen((snapshot) {
+        if (snapshot.exists && mounted) {
+          setState(() {
+            _currentFlagCount = snapshot.data()?['flagCount'] ?? 0;
+          });
+        }
       });
+      
+      // Check if the current user has already flagged this property
+      final userFlagDoc = await propertyDoc.collection('flags').doc(_userId!).get();
+      
+      if (mounted) {
+        setState(() {
+          _isFlaggedByCurrentUser = userFlagDoc.exists;
+        });
+      }
+
+    } catch (e) {
+      print('Error checking flag status: $e');
     }
   }
-  
-  Future<void> _toggleFlagStatus() async {
-    if (_userId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please log in to manage flags.')),
-      );
-      return;
-    }
 
-    final propertyId = widget.property.id;
-    final flagDocRef = _firestore
-        .collection('listings')
-        .doc(propertyId)
-        .collection('flags')
-        .doc(_userId);
-        
-    final listingDocRef = _firestore.collection('listings').doc(propertyId);
-
+  // 3. Check Wishlist Status
+  Future<void> _checkWishlistStatus() async {
+    if (_userId == null) return;
     try {
-      if (_isFlaggedByCurrentUser) {
-        // --- Unflagging ---
-        await flagDocRef.delete();
-        await listingDocRef.update({
-          'flagCount': FieldValue.increment(-1),
+      final doc = await _firestore
+          .collection('users')
+          .doc(_userId)
+          .collection('wishlist')
+          .doc(widget.property.id)
+          .get();
+      if (mounted) {
+        setState(() {
+          _isWishlisted = doc.exists;
         });
-
-        if (mounted) {
-          setState(() {
-            _isFlaggedByCurrentUser = false;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Listing unflagged.')),
-          );
-        }
-
-      } else {
-        // --- Flagging: Use a Transaction for atomic increment and threshold check ---
-        bool shouldRemove = await _firestore.runTransaction<bool>((transaction) async {
-            // 1. Mark the user's flag
-            transaction.set(flagDocRef, {
-                'userId': _userId,
-                'flaggedAt': FieldValue.serverTimestamp(),
-            });
-
-            // 2. Read, modify, and write the listing data atomically
-            final freshSnap = await transaction.get(listingDocRef);
-            if (!freshSnap.exists) {
-                // If the listing doesn't exist anymore, abort the flag
-                throw Exception('Listing document not found during transaction.');
-            }
-            
-            final currentFlagCount = (freshSnap.data()?['flagCount'] ?? 0) as int;
-            final newFlagCount = currentFlagCount + 1;
-            
-            Map<String, dynamic> updates = {
-                'flagCount': FieldValue.increment(1), 
-                'isUnderReview': true,
-            };
-            
-            bool remove = newFlagCount >= _FLAG_THRESHOLD;
-            if (remove) {
-                updates['isRemoved'] = true; // Mark for global hiding
-            }
-
-            transaction.update(listingDocRef, updates);
-            
-            return remove; // Return true if the threshold was met
-        });
-        
-        // --- UI Updates after successful transaction ---
-        if (mounted) {
-          setState(() {
-            _isFlaggedByCurrentUser = true;
-          });
-
-          if (shouldRemove) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Listing flagged and removed from public view due to multiple reports.')),
-            );
-          } else {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Listing flagged successfully. It is now under review.')),
-            );
-          }
-        }
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update flag status: $e')),
-        );
-      }
+      print('Error checking wishlist status: $e');
     }
   }
 
-  // --- End Flagging Logic ---
+  // --- Action Methods ---
 
+  // 1. Toggle Wishlist Status
   Future<void> _toggleWishlist() async {
     if (_userId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please log in to manage your wishlist.')),
-      );
-      return;
+       _showSnackbar('Please log in to manage your wishlist.', Colors.orange);
+       return;
     }
-
-    final docRef = _firestore
+    
+    final wishlistRef = _firestore
         .collection('users')
         .doc(_userId)
         .collection('wishlist')
         .doc(widget.property.id);
 
-    if (_isWishlisted) {
-      await docRef.delete();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${widget.property.title} removed from wishlist.')),
-      );
-    } else {
-      await docRef.set({
-        'addedAt': FieldValue.serverTimestamp(),
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${widget.property.title} added to wishlist!')),
-      );
+    try {
+      if (_isWishlisted) {
+        // Remove from wishlist
+        await wishlistRef.delete();
+        _showSnackbar('Removed from Wishlist', Colors.red);
+      } else {
+        // Add to wishlist (only store the ID)
+        await wishlistRef.set({}); // Set an empty document to indicate presence
+        _showSnackbar('Added to Wishlist!', Colors.green);
+      }
+      if (mounted) {
+        setState(() {
+          _isWishlisted = !_isWishlisted;
+        });
+      }
+    } catch (e) {
+      _showSnackbar('Failed to update wishlist.', Colors.red);
+      print('Error toggling wishlist: $e');
     }
+  }
+  
+  // 2. Toggle Flagging Status (Handles both flagging and unflagging)
+  Future<void> _toggleFlagProperty() async {
+    if (_userId == null) {
+      _showSnackbar('Please log in to flag a property.', Colors.orange);
+      return;
+    }
+    if (_isFlagging) return;
 
-    // Re-check status to update the UI
-    _checkWishlistStatus(); 
+    setState(() { _isFlagging = true; });
+
+    final propertyRef = _firestore.collection('listings').doc(widget.property.id);
+    final flagRef = propertyRef.collection('flags').doc(_userId!);
+    
+    try {
+      if (_isFlaggedByCurrentUser) {
+        // UNFLAG LOGIC
+        await _firestore.runTransaction((transaction) async {
+          transaction.delete(flagRef);
+          transaction.update(propertyRef, {'flagCount': FieldValue.increment(-1)});
+        });
+        _showSnackbar('Property unflagged.', Colors.green);
+      } else {
+        // FLAG LOGIC
+        await _firestore.runTransaction((transaction) async {
+          // Set the flag document to track who flagged it
+          transaction.set(flagRef, {'timestamp': FieldValue.serverTimestamp()});
+          // Increment the overall flag count on the main property document
+          transaction.update(propertyRef, {'flagCount': FieldValue.increment(1)});
+        });
+        _showSnackbar('Property flagged for review.', Colors.red);
+      }
+      
+      // Update state after successful transaction
+      if (mounted) {
+        setState(() {
+          _isFlaggedByCurrentUser = !_isFlaggedByCurrentUser;
+          // The listener in _checkFlagStatus will update _currentFlagCount automatically
+        });
+      }
+      
+    } catch (e) {
+      _showSnackbar('Failed to update flag status.', Colors.red);
+      print('Error toggling flag status: $e');
+    } finally {
+      if (mounted) {
+        setState(() { _isFlagging = false; });
+      }
+    }
   }
 
+  // --- Utility ---
+  void _showSnackbar(String message, Color color) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: color,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  // --- UI Building Blocks ---
+
+  Widget _buildDetailRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 24, color: Theme.of(context).primaryColor),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFlagStatus() {
+    final bool isHighlyFlagged = _currentFlagCount >= _FLAG_THRESHOLD;
+    
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  isHighlyFlagged ? Icons.warning : Icons.flag, 
+                  color: isHighlyFlagged ? Colors.red.shade700 : Colors.orange.shade700,
+                  size: 24,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  isHighlyFlagged ? 'High Flag Count!' : 'Flag Status',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: isHighlyFlagged ? Colors.red.shade700 : Colors.black87,
+                  ),
+                ),
+              ],
+            ),
+            
+            Text(
+              'Count: $_currentFlagCount',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: isHighlyFlagged ? Colors.red.shade700 : Colors.black54,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton.icon(
+            onPressed: _userId != null ? _toggleFlagProperty : () => _showSnackbar('Please log in to flag.', Colors.orange),
+            // Icons.flag_outlined is the replacement for Icons.flag_off
+            icon: Icon(_isFlaggedByCurrentUser ? Icons.flag_outlined : Icons.flag),
+            label: Text(
+              _isFlagging 
+                ? 'Updating...' 
+                : (_isFlaggedByCurrentUser ? 'Unflag Property' : 'Flag Property for Review')
+            ),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _isFlaggedByCurrentUser ? Colors.orange.shade200 : Colors.red.shade100,
+              foregroundColor: _isFlaggedByCurrentUser ? Colors.orange.shade900 : Colors.red.shade900,
+              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+          ),
+        ),
+        if (isHighlyFlagged)
+          Padding(
+            padding: const EdgeInsets.only(top: 8.0),
+            child: Text(
+              'This property has been flagged $_currentFlagCount times. Listings with $_FLAG_THRESHOLD or more flags are automatically under review.',
+              style: TextStyle(color: Colors.red.shade700, fontStyle: FontStyle.italic),
+            ),
+          ),
+      ],
+    );
+  }
+
+
+  // --- Main Build Method ---
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    // Determine if the URL is valid/present for safe usage
+    // We check for null first, then for emptiness.
+    final hasImageUrl = widget.property.imageUrl != null && widget.property.imageUrl!.isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.property.title),
-        elevation: 4, 
-        actions: const [],
+        actions: [
+          // Wishlist Toggle Button
+          IconButton(
+            icon: Icon(
+              _isWishlisted ? Icons.favorite : Icons.favorite_border,
+              color: _isWishlisted ? Colors.red : Colors.grey.shade700,
+            ),
+            onPressed: _toggleWishlist,
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            
-            SizedBox(
-              height: 300,
-              width: double.infinity,
-              child: widget.property.imageUrl != null && widget.property.imageUrl!.isNotEmpty
-                  ? Image.network(
-                      widget.property.imageUrl!,
+            // --- Property Image (FIXED: Uses null-aware operator for NetworkImage) ---
+            Hero(
+              tag: 'property-image-${widget.property.id}',
+              child: Container(
+                height: 250,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  image: hasImageUrl 
+                    ? DecorationImage(
+                      // FIX: The `!` null-aware operator is used here because we confirm
+                      // it's not null and not empty in the `hasImageUrl` check.
+                      image: NetworkImage(widget.property.imageUrl!),
                       fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) {
-                        return const Center(child: Icon(Icons.broken_image, size: 60, color: Colors.grey));
+                      onError: (exception, stackTrace) {
+                        // Placeholder if image loading fails
+                        print('Image load error: $exception');
                       },
                     )
-                  : const Center(
-                      child: Icon(Icons.house, size: 100, color: Colors.blueGrey),
-                    ),
+                    : null, // No DecorationImage if URL is empty or null
+                  color: Colors.grey.shade200,
+                ),
+                // Display a placeholder icon if URL is empty or null
+                child: !hasImageUrl 
+                  ? const Center(child: Icon(Icons.image_not_supported, size: 80, color: Colors.grey))
+                  : null,
+              ),
             ),
-            
+
             Padding(
               padding: const EdgeInsets.all(20.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // --- Price & Type ---
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Expanded(
-                        child: Text(
-                          widget.property.title,
-                          style: Theme.of(context).textTheme.headlineMedium!.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
                       Text(
                         '\$${widget.property.price}',
-                        style: Theme.of(context).textTheme.headlineSmall!.copyWith(
-                          color: Colors.green.shade700,
+                        style: TextStyle(
+                          fontSize: 32,
                           fontWeight: FontWeight.w900,
+                          color: theme.primaryColor,
+                        ),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: theme.primaryColor.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          widget.property.type,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: theme.primaryColor,
+                          ),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+                  const Divider(height: 30),
 
-                  Row(
-                    children: [
-                      const Icon(Icons.location_on, size: 18, color: Colors.grey),
-                      const SizedBox(width: 4),
-                      Text(
-                        widget.property.address,
-                        style: const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
-                    ],
+                  // --- Seller Info ---
+                  _buildDetailRow(
+                    Icons.person_pin_circle, 
+                    'Listed By', 
+                    '$_sellerName (ID: ${widget.property.sellerId.substring(0, 4)}...)',
                   ),
-                  const SizedBox(height: 5),
-                  Chip(
-                    label: Text(widget.property.type),
-                    backgroundColor: Colors.blue.shade100,
-                  ),
-
-                  const SizedBox(height: 25),
                   
-                  Text(
-                    'Description',
-                    style: Theme.of(context).textTheme.titleLarge,
+                  // --- Location & Date ---
+                  _buildDetailRow(Icons.location_on, 'Address', widget.property.address),
+                  _buildDetailRow(
+                    Icons.date_range, 
+                    'Date Listed', 
+                    widget.property.timestamp.toDate().toString().split(' ')[0],
                   ),
-                  const Divider(),
+                  const Divider(height: 30),
+
+                  // --- Description ---
+                  const Text(
+                    'Description',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.black87),
+                  ),
+                  const SizedBox(height: 10),
                   Text(
                     widget.property.description,
-                    style: const TextStyle(fontSize: 16, height: 1.5),
+                    style: const TextStyle(fontSize: 16, height: 1.5, color: Colors.black54),
                   ),
-
-                  const SizedBox(height: 30),
+                  const Divider(height: 30),
                   
-                  // --- 1. Wishlist Button ---
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _toggleWishlist,
-                      icon: Icon(
-                        _isWishlisted ? Icons.favorite : Icons.favorite_border,
-                        color: _isWishlisted ? Colors.red : Theme.of(context).primaryColor,
-                      ),
-                      label: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12.0),
-                        child: Text(
-                          _isWishlisted ? 'REMOVE FROM WISHLIST' : 'ADD TO WISHLIST',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: _isWishlisted ? Colors.red : Theme.of(context).primaryColor,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        side: BorderSide(
-                          color: _isWishlisted ? Colors.red : Theme.of(context).primaryColor, 
-                          width: 1.5,
-                        ),
-                      ),
-                    ),
-                  ),
+                  // --- Flagging/Review Section ---
+                  _buildFlagStatus(),
+                  const Divider(height: 30),
                   
-                  const SizedBox(height: 10), // Small spacer
-                  
-                  // --- 2. Flagging Button ---
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: _toggleFlagStatus,
-                      icon: Icon(
-                        _isFlaggedByCurrentUser ? Icons.flag : Icons.flag_outlined,
-                        color: _isFlaggedByCurrentUser ? Colors.red : Colors.grey.shade600,
-                      ),
-                      label: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12.0),
-                        child: Text(
-                          _isFlaggedByCurrentUser ? 'UNFLAG LISTING' : 'FLAG LISTING FOR REVIEW',
-                          style: TextStyle(
-                            fontSize: 16,
-                            color: _isFlaggedByCurrentUser ? Colors.red : Colors.grey.shade700,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                      style: OutlinedButton.styleFrom(
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                        side: BorderSide(
-                          color: _isFlaggedByCurrentUser ? Colors.red : Colors.grey.shade400, 
-                          width: 1.5,
-                        ),
-                      ),
-                    ),
-                  ),
-
-                  const SizedBox(height: 30),
-
-                  Text(
-                    'Contact Information',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
-                  const Divider(),
-                  ListTile(
-                    leading: const CircleAvatar(child: Icon(Icons.person)),
-                    title: Text(_sellerName),
-                    subtitle: Text('Listing ID: ${widget.property.id}'),
-
-                    trailing: IconButton(
-                      icon: const Icon(Icons.chat),
-                      onPressed: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Chat feature coming soon!')),
-                        );
-                      },
-                    ),
-                  ),
-                  
-                  // Removed the trailing SizedBox here
                 ],
               ),
             ),
           ],
         ),
       ),
-      // --- Schedule Virtual Tour Button in fixed bottom bar ---
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 15.0),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.15),
-              blurRadius: 10,
-              spreadRadius: 1,
-            ),
-          ],
-        ),
-        child: SizedBox(
-          height: 55,
-          child: ElevatedButton.icon(
-            onPressed: () {
-              // --- NAVIGATION LOGIC ---
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => TourSchedulingScreen(
-                    propertyId: widget.property.id,
-                    propertyTitle: widget.property.title,
-                    sellerId: widget.property.sellerId, // Pass the seller ID
+      // --- Bottom Action Bar (Schedule Tour) ---
+      bottomNavigationBar: SafeArea(
+        child: Row(
+          children: [
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(10),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.15),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: SizedBox(
+                    height: 55,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        // --- NAVIGATION LOGIC (FIXED: Added sellerId) ---
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => TourSchedulingScreen(
+                              propertyId: widget.property.id,
+                              propertyTitle: widget.property.title,
+                              // MANDATORY FIX: Pass the sellerId
+                              sellerId: widget.property.sellerId, 
+                            ),
+                          ),
+                        );
+                      },
+                      icon: const Icon(Icons.calendar_month, size: 24),
+                      label: const Text('Schedule Virtual Tour', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: theme.primaryColor,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      ),
+                    ),
                   ),
                 ),
-              );
-            },
-            icon: const Icon(Icons.calendar_month, size: 24),
-            label: const Text('Schedule Virtual Tour', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Theme.of(context).primaryColor,
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
             ),
-          ),
+          ],
         ),
       ),
     );
