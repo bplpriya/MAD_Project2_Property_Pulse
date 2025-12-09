@@ -5,14 +5,19 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ^3.9.0
+  sdk: '>=3.0.0 <4.0.0' # Updated to recommended stable range
 
 dependencies:
   flutter:
     sdk: flutter
-  firebase_core: ^4.2.1
-  firebase_auth: ^6.1.2
-  cloud_firestore: ^6.1.0
+  
+  # Firebase Core Packages (Updated to latest major versions)
+  firebase_core: ^2.24.2
+  firebase_auth: ^4.15.3
+  cloud_firestore: ^4.13.6
+  firebase_storage: ^11.6.0 # ADDED: Required for image upload
+
+  # Utility Packages
   image_picker: ^1.1.0
   http: ^1.2.0
   cupertino_icons: ^1.0.8
@@ -21,8 +26,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
-
-  flutter_lints: ^6.0.0
+  flutter_lints: ^3.0.1 # Updated to latest version
 
 flutter:
   uses-material-design: true
