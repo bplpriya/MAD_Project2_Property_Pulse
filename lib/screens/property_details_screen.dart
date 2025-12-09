@@ -1,9 +1,8 @@
-// lib/screens/property_details_screen.dart
-
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart'; 
 import 'package:firebase_auth/firebase_auth.dart'; 
 import '../models/property_model.dart';
+import 'tour_scheduling_screen.dart'; // Import the tour scheduling screen
 
 class PropertyDetailsScreen extends StatefulWidget {
   final PropertyModel property;
@@ -19,7 +18,9 @@ class PropertyDetailsScreen extends StatefulWidget {
 
 class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
   final _firestore = FirebaseFirestore.instance;
-  final _userId = FirebaseAuth.instance.currentUser?.uid;
+  // Use a getter for a consistent check of the current user ID
+  String? get _userId => FirebaseAuth.instance.currentUser?.uid;
+  
   bool _isWishlisted = false;
   String _sellerName = 'Loading seller info...';
   bool _isFlaggedByCurrentUser = false; 
@@ -131,39 +132,54 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
         }
 
       } else {
-        // --- Flagging ---
-        await flagDocRef.set({
-          'userId': _userId,
-          'flaggedAt': FieldValue.serverTimestamp(),
+        // --- Flagging: Use a Transaction for atomic increment and threshold check ---
+        bool shouldRemove = await _firestore.runTransaction<bool>((transaction) async {
+            // 1. Mark the user's flag
+            transaction.set(flagDocRef, {
+                'userId': _userId,
+                'flaggedAt': FieldValue.serverTimestamp(),
+            });
+
+            // 2. Read, modify, and write the listing data atomically
+            final freshSnap = await transaction.get(listingDocRef);
+            if (!freshSnap.exists) {
+                // If the listing doesn't exist anymore, abort the flag
+                throw Exception('Listing document not found during transaction.');
+            }
+            
+            final currentFlagCount = (freshSnap.data()?['flagCount'] ?? 0) as int;
+            final newFlagCount = currentFlagCount + 1;
+            
+            Map<String, dynamic> updates = {
+                'flagCount': FieldValue.increment(1), 
+                'isUnderReview': true,
+            };
+            
+            bool remove = newFlagCount >= _FLAG_THRESHOLD;
+            if (remove) {
+                updates['isRemoved'] = true; // Mark for global hiding
+            }
+
+            transaction.update(listingDocRef, updates);
+            
+            return remove; // Return true if the threshold was met
         });
         
-        // Update flag count and mark for review
-        await listingDocRef.update({
-          'flagCount': FieldValue.increment(1),
-          'isUnderReview': true,
-        });
-
-        // Check if the new flag count meets the removal threshold
-        final listingSnapshot = await listingDocRef.get();
-        final currentFlagCount = listingSnapshot.data()?['flagCount'] ?? 0;
-
-        if (currentFlagCount >= _FLAG_THRESHOLD) {
-          await listingDocRef.update({
-            'isRemoved': true, // New field to hide the listing globally
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Listing flagged and removed from public view due to multiple reports.')),
-          );
-        } else {
-           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Listing flagged successfully. It is now under review.')),
-          );
-        }
-
+        // --- UI Updates after successful transaction ---
         if (mounted) {
           setState(() {
             _isFlaggedByCurrentUser = true;
           });
+
+          if (shouldRemove) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Listing flagged and removed from public view due to multiple reports.')),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Listing flagged successfully. It is now under review.')),
+            );
+          }
         }
       }
     } catch (e) {
@@ -205,6 +221,7 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
       );
     }
 
+    // Re-check status to update the UI
     _checkWishlistStatus(); 
   }
 
@@ -214,9 +231,7 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
       appBar: AppBar(
         title: Text(widget.property.title),
         elevation: 4, 
-        actions: [
-          // REMOVED FLAG BUTTON FROM APPBAR
-        ],
+        actions: const [],
       ),
       body: SingleChildScrollView(
         child: Column(
@@ -328,7 +343,7 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
                   
                   const SizedBox(height: 10), // Small spacer
                   
-                  // --- 2. Flagging Button (New Position) ---
+                  // --- 2. Flagging Button ---
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(
@@ -380,12 +395,50 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
                     ),
                   ),
                   
-                  const SizedBox(height: 50),
-                  
+                  // Removed the trailing SizedBox here
                 ],
               ),
             ),
           ],
+        ),
+      ),
+      // --- Schedule Virtual Tour Button in fixed bottom bar ---
+      bottomNavigationBar: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 15.0),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.15),
+              blurRadius: 10,
+              spreadRadius: 1,
+            ),
+          ],
+        ),
+        child: SizedBox(
+          height: 55,
+          child: ElevatedButton.icon(
+            onPressed: () {
+              // --- NAVIGATION LOGIC ---
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => TourSchedulingScreen(
+                    propertyId: widget.property.id,
+                    propertyTitle: widget.property.title,
+                    sellerId: widget.property.sellerId, // Pass the seller ID
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.calendar_month, size: 24),
+            label: const Text('Schedule Virtual Tour', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w600)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Theme.of(context).primaryColor,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          ),
         ),
       ),
     );

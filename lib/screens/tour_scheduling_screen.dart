@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart'; 
 
 // --- MOCK SERVICE FUNCTION (Replaces Firebase Cloud Function Call) ---
 // This function simulates the server-side logic that connects to the Google Calendar API
 // to check the seller's availability and prevent double-booking (Challenge 4).
-Future<String> scheduleTourRequest(String propertyId, DateTime selectedTime) async {
+// Added buyerId and sellerId parameters
+Future<String> scheduleTourRequest(String propertyId, DateTime selectedTime, String buyerId, String sellerId) async {
   // Simulate network latency for API call
   await Future.delayed(const Duration(seconds: 2));
 
-  // Mock Conflict Detection Logic
+  // 1. Mock Conflict Detection Logic
   // Conflict if the time is between 10:00 AM and 11:00 AM on the current date + 2 days
   final mockConflictDate = DateTime.now().add(const Duration(days: 2));
   final isConflictTime = selectedTime.hour == 10 && selectedTime.minute == 0;
@@ -19,6 +22,22 @@ Future<String> scheduleTourRequest(String propertyId, DateTime selectedTime) asy
     return 'conflict'; // Conflict detected by Cloud Function
   }
   
+  // 2. Mock Firestore Transaction Logging (To be replaced by Cloud Function logic)
+  try {
+    // Log the successful booking request in Firestore
+    await FirebaseFirestore.instance.collection('tours').add({
+      'propertyId': propertyId,
+      'buyerId': buyerId,
+      'sellerId': sellerId,
+      'scheduledTime': selectedTime,
+      'bookedAt': FieldValue.serverTimestamp(),
+      'status': 'pending', // Initially pending until confirmed by seller/calendar
+    });
+    print('Tour booking successfully logged for: $propertyId at $selectedTime');
+  } catch (e) {
+    print('Error logging mock tour booking: $e');
+  }
+
   // Successful Booking
   return 'success';
 }
@@ -27,11 +46,13 @@ Future<String> scheduleTourRequest(String propertyId, DateTime selectedTime) asy
 class TourSchedulingScreen extends StatefulWidget {
   final String propertyId;
   final String propertyTitle;
+  final String sellerId; // NEW: Added required sellerId
 
   const TourSchedulingScreen({
     super.key,
     required this.propertyId,
     required this.propertyTitle,
+    required this.sellerId, // NEW: Added required sellerId
   });
 
   @override
@@ -40,44 +61,87 @@ class TourSchedulingScreen extends StatefulWidget {
 
 class _TourSchedulingScreenState extends State<TourSchedulingScreen> {
   DateTime _selectedDate = DateTime.now().add(const Duration(days: 1));
-  TimeOfDay? _selectedTime;
+  String? _selectedTime;
+  final List<String> _availableTimes = ['9:00 AM', '10:00 AM', '11:00 AM', '1:00 PM', '2:00 PM', '3:00 PM', '4:00 PM'];
   bool _isBooking = false;
+  String? get _currentUserId => FirebaseAuth.instance.currentUser?.uid;
 
-  // Mock availability slots for demonstration
-  final List<TimeOfDay> availableSlots = [
-    const TimeOfDay(hour: 9, minute: 0),
-    const TimeOfDay(hour: 10, minute: 0), // Mock Conflict Slot
-    const TimeOfDay(hour: 11, minute: 0),
-    const TimeOfDay(hour: 13, minute: 0),
-    const TimeOfDay(hour: 14, minute: 0),
-    const TimeOfDay(hour: 16, minute: 0),
-  ];
-
-  Future<void> _selectDate(BuildContext context) async {
-    final DateTime? picked = await showDatePicker(
-      context: context,
-      initialDate: _selectedDate,
-      firstDate: DateTime.now().add(const Duration(days: 1)),
-      lastDate: DateTime.now().add(const Duration(days: 60)),
-    );
-    if (picked != null && picked != _selectedDate) {
-      setState(() {
-        _selectedDate = picked;
-        _selectedTime = null; // Reset time selection on new date
-      });
+  @override
+  void initState() {
+    super.initState();
+    // Default selection to the first available time
+    if (_availableTimes.isNotEmpty) {
+      _selectedTime = _availableTimes.first;
     }
   }
 
-  void _handleTimeSelection(TimeOfDay time) {
+  void _selectDate(DateTime date) {
+    setState(() {
+      _selectedDate = date;
+      _selectedTime = _availableTimes.isNotEmpty ? _availableTimes.first : null;
+    });
+  }
+
+  void _selectTimeSelection(String time) {
     setState(() {
       _selectedTime = time;
     });
   }
 
-  void _handleBooking() async {
+  DateTime _combineDateTime(DateTime date, String time) {
+    // Parse time string (e.g., '3:00 PM') into hour/minute
+    final parts = time.split(' ');
+    final timeOfDay = time.split(':');
+    
+    // Safety check for parsing 
+    if (timeOfDay.length < 2) return date; 
+
+    int hour = int.parse(timeOfDay[0].replaceAll(RegExp(r'[^0-9]'), '')); // Extract hour part cleanly
+    final minutePart = timeOfDay[1].substring(0, 2); // Get '00' or '30' part
+    final minute = int.parse(minutePart);
+    final period = parts.length > 1 ? parts[1].toUpperCase() : '';
+
+    if (period == 'PM' && hour != 12) {
+      hour += 12;
+    }
+    if (period == 'AM' && hour == 12) {
+      hour = 0; // Midnight (12 AM)
+    }
+    
+    // Ensure hour is within 0-23 range
+    hour = hour % 24; 
+
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+      hour,
+      minute,
+    );
+  }
+
+
+  Future<void> _handleBooking() async {
     if (_selectedTime == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select an available time slot.')),
+        const SnackBar(content: Text('Please select a time slot.')),
+      );
+      return;
+    }
+    
+    final buyerId = _currentUserId;
+    if (buyerId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be logged in to schedule a tour.')),
+      );
+      return;
+    }
+
+    final tourDateTime = _combineDateTime(_selectedDate, _selectedTime!);
+    
+    if (tourDateTime.isBefore(DateTime.now().add(const Duration(hours: 1)))) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a time slot at least 1 hour in the future.')),
       );
       return;
     }
@@ -86,145 +150,165 @@ class _TourSchedulingScreenState extends State<TourSchedulingScreen> {
       _isBooking = true;
     });
 
-    final bookingDateTime = DateTime(
-      _selectedDate.year,
-      _selectedDate.month,
-      _selectedDate.day,
-      _selectedTime!.hour,
-      _selectedTime!.minute,
-    );
-
     try {
-      // --- CRITICAL CALL: Simulate Cloud Function for Conflict Detection ---
-      final result = await scheduleTourRequest(widget.propertyId, bookingDateTime);
-
-      if (result == 'success') {
-        _showSuccessDialog();
-      } else if (result == 'conflict') {
-        _showConflictDialog();
-      } else {
-        _showError('Scheduling failed due to a server error.');
-      }
-    } catch (e) {
-      _showError('Network error: Could not complete scheduling.');
-    } finally {
-      setState(() {
-        _isBooking = false;
-      });
-    }
-  }
-
-  void _showSuccessDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Tour Confirmed!'),
-        content: Text('Your tour for ${widget.propertyTitle} has been successfully booked for $_selectedDate at ${_selectedTime!.format(context)}. Check your notifications for a reminder.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).popUntil((route) => route.isFirst), // Go back to home/listings
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showConflictDialog() {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Conflict Detected'),
-        content: const Text('The seller is already booked for the selected time. Please select another slot.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Select Another Time'),
-          ),
-        ],
-      ),
-    );
-  }
-  
-  void _showError(String message) {
-     ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message, style: const TextStyle(color: Colors.white)), backgroundColor: Colors.red),
+      final result = await scheduleTourRequest(
+        widget.propertyId, 
+        tourDateTime, 
+        buyerId, // Current user is the buyer
+        widget.sellerId, // Seller is passed from the property model
       );
+
+      String message;
+      if (result == 'conflict') {
+        message = 'The seller is unavailable at this time. Please choose another slot.';
+      } else {
+        message = 'Tour successfully requested for ${widget.propertyTitle} on ${_selectedDate.month}/${_selectedDate.day}/${_selectedDate.year} at $_selectedTime!';
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: result == 'success' ? Colors.green : Colors.red,
+        ),
+      );
+      
+      if (result == 'success') {
+        // Optionally navigate back after successful booking
+        Navigator.pop(context);
+      }
+
+    } catch (e) {
+      print('Booking error: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Failed to schedule tour. Please try again.')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isBooking = false;
+        });
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+
+    // Filter dates to show the next 7 days, starting tomorrow
+    final now = DateTime.now();
+    final nextSevenDays = List.generate(7, (i) => now.add(Duration(days: i + 1)));
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Schedule Virtual Tour'),
+        title: const Text("Schedule Virtual Tour"),
         backgroundColor: theme.primaryColor,
         foregroundColor: Colors.white,
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20.0),
+        padding: const EdgeInsets.all(16.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              'Booking Tour for:',
-              style: theme.textTheme.titleLarge,
-            ),
-            const SizedBox(height: 4),
+            // --- Property Title & Seller Info ---
             Text(
               widget.propertyTitle,
               style: theme.textTheme.headlineSmall!.copyWith(fontWeight: FontWeight.bold, color: theme.primaryColor),
             ),
-            const Divider(height: 30),
-
-            // --- Date Picker ---
-            Text('1. Select Date', style: theme.textTheme.titleMedium!.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
-            InkWell(
-              onTap: _isBooking ? null : () => _selectDate(context),
-              child: Container(
-                padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-                decoration: BoxDecoration(
-                  border: Border.all(color: theme.primaryColor.withOpacity(0.5)),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Date: ${_selectedDate.month}/${_selectedDate.day}/${_selectedDate.year}',
-                      style: theme.textTheme.titleMedium,
-                    ),
-                    const Icon(Icons.edit_calendar, color: Colors.teal),
-                  ],
-                ),
-              ),
+            const SizedBox(height: 5),
+            Text(
+              'Property ID: ${widget.propertyId}',
+              style: theme.textTheme.bodyMedium!.copyWith(color: Colors.grey),
+            ),
+            Text(
+              'Seller ID: ${widget.sellerId}',
+              style: theme.textTheme.bodySmall!.copyWith(color: Colors.grey),
             ),
             const SizedBox(height: 30),
 
-            // --- Time Slot Picker ---
-            Text('2. Select Time Slot (All times are local)', style: theme.textTheme.titleMedium!.copyWith(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 10),
+            // --- Date Selection ---
+            Text(
+              'Select a Date',
+              style: theme.textTheme.titleLarge!.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 15),
+            
+            SizedBox(
+              height: 100,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: nextSevenDays.length,
+                itemBuilder: (context, index) {
+                  final date = nextSevenDays[index];
+                  final isSelected = date.day == _selectedDate.day && date.month == _selectedDate.month;
+                  
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 12.0),
+                    child: InkWell(
+                      onTap: () => _selectDate(date),
+                      child: Container(
+                        width: 70,
+                        decoration: BoxDecoration(
+                          color: isSelected ? theme.primaryColor : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: isSelected ? theme.primaryColor : Colors.grey.shade300,
+                            width: 1,
+                          ),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              '${date.day}',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: isSelected ? Colors.white : Colors.black87,
+                              ),
+                            ),
+                            Text(
+                              '${date.month}/${date.year % 100}', // e.g., 12/25
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isSelected ? Colors.white70 : Colors.grey.shade600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            
+            const SizedBox(height: 40),
+
+            // --- Time Selection ---
+            Text(
+              'Select a Time (Available Slots)',
+              style: theme.textTheme.titleLarge!.copyWith(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 15),
+
             Wrap(
               spacing: 10.0,
               runSpacing: 10.0,
-              children: availableSlots.map((time) {
-                final isSelected = _selectedTime == time;
-                final isConflictMock = _selectedDate.day == DateTime.now().add(const Duration(days: 2)).day && time.hour == 10;
-                
+              children: _availableTimes.map((time) {
+                final isSelected = time == _selectedTime;
                 return ChoiceChip(
-                  label: Text(time.format(context)),
+                  label: Text(time),
                   selected: isSelected,
                   selectedColor: theme.primaryColor,
-                  disabledColor: isConflictMock ? Colors.red.shade100 : Colors.grey.shade200,
+                  backgroundColor: Colors.grey.shade200,
                   labelStyle: TextStyle(
-                    color: isSelected ? Colors.white : Colors.black87,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                    color: isSelected ? Colors.white : Colors.black,
+                    fontWeight: FontWeight.w600,
                   ),
-                  avatar: isConflictMock ? const Icon(Icons.cancel, color: Colors.red, size: 18) : null,
-                  onSelected: isConflictMock || _isBooking ? null : (selected) {
+                  onSelected: (selected) {
                     if (selected) {
-                      _handleTimeSelection(time);
+                      _selectTimeSelection(time);
                     }
                   },
                 );
