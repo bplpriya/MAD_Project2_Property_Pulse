@@ -22,12 +22,15 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
   final _userId = FirebaseAuth.instance.currentUser?.uid;
   bool _isWishlisted = false;
   String _sellerName = 'Loading seller info...';
+  bool _isFlaggedByCurrentUser = false; 
+  static const int _FLAG_THRESHOLD = 10; // New: Listing removal threshold
 
   @override
   void initState() {
     super.initState();
     _checkWishlistStatus();
     _fetchSellerInfo();
+    _checkFlagStatus(); 
   }
 
   Future<void> _fetchSellerInfo() async {
@@ -72,6 +75,107 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
       });
     }
   }
+  
+  // --- Flagging Logic ---
+
+  Future<void> _checkFlagStatus() async {
+    if (_userId == null) return;
+
+    final flagDocRef = _firestore
+        .collection('listings')
+        .doc(widget.property.id)
+        .collection('flags')
+        .doc(_userId);
+
+    final doc = await flagDocRef.get();
+    
+    if (mounted) {
+      setState(() {
+        _isFlaggedByCurrentUser = doc.exists;
+      });
+    }
+  }
+  
+  Future<void> _toggleFlagStatus() async {
+    if (_userId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please log in to manage flags.')),
+      );
+      return;
+    }
+
+    final propertyId = widget.property.id;
+    final flagDocRef = _firestore
+        .collection('listings')
+        .doc(propertyId)
+        .collection('flags')
+        .doc(_userId);
+        
+    final listingDocRef = _firestore.collection('listings').doc(propertyId);
+
+    try {
+      if (_isFlaggedByCurrentUser) {
+        // --- Unflagging ---
+        await flagDocRef.delete();
+        await listingDocRef.update({
+          'flagCount': FieldValue.increment(-1),
+        });
+
+        if (mounted) {
+          setState(() {
+            _isFlaggedByCurrentUser = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Listing unflagged.')),
+          );
+        }
+
+      } else {
+        // --- Flagging ---
+        await flagDocRef.set({
+          'userId': _userId,
+          'flaggedAt': FieldValue.serverTimestamp(),
+        });
+        
+        // Update flag count and mark for review
+        await listingDocRef.update({
+          'flagCount': FieldValue.increment(1),
+          'isUnderReview': true,
+        });
+
+        // Check if the new flag count meets the removal threshold
+        final listingSnapshot = await listingDocRef.get();
+        final currentFlagCount = listingSnapshot.data()?['flagCount'] ?? 0;
+
+        if (currentFlagCount >= _FLAG_THRESHOLD) {
+          await listingDocRef.update({
+            'isRemoved': true, // New field to hide the listing globally
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Listing flagged and removed from public view due to multiple reports.')),
+          );
+        } else {
+           ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Listing flagged successfully. It is now under review.')),
+          );
+        }
+
+        if (mounted) {
+          setState(() {
+            _isFlaggedByCurrentUser = true;
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to update flag status: $e')),
+        );
+      }
+    }
+  }
+
+  // --- End Flagging Logic ---
 
   Future<void> _toggleWishlist() async {
     if (_userId == null) {
@@ -110,8 +214,17 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
       appBar: AppBar(
         title: Text(widget.property.title),
         elevation: 4, 
-        actions: const [
-          
+        actions: [
+          // Flagging Button
+          IconButton(
+            icon: Icon(
+              _isFlaggedByCurrentUser ? Icons.flag : Icons.flag_outlined,
+              color: _isFlaggedByCurrentUser ? Colors.red : Colors.grey,
+            ),
+            onPressed: _toggleFlagStatus, 
+            tooltip: _isFlaggedByCurrentUser ? 'Unflag Listing' : 'Flag Listing for Review',
+          ),
+          // Placeholder for other actions (like the Buy button, which is commented out)
         ],
       ),
       body: SingleChildScrollView(
@@ -245,26 +358,6 @@ class _PropertyDetailsScreenState extends State<PropertyDetailsScreen> {
                   
                   const SizedBox(height: 50),
                   
-                  // SizedBox(
-                  //   width: double.infinity,
-                  //   child: ElevatedButton.icon(
-                  //     onPressed: () {
-                  //       ScaffoldMessenger.of(context).showSnackBar(
-                  //         SnackBar(content: Text('Initiating purchase for ${widget.property.title}')),
-                  //       );
-                  //     },
-                  //     icon: const Icon(Icons.attach_money),
-                  //     label: Padding(
-                  //       padding: const EdgeInsets.symmetric(vertical: 12.0),
-                  //       child: Text('Buy for \$${widget.property.price}', style: const TextStyle(fontSize: 18)),
-                  //     ),
-                  //     style: ElevatedButton.styleFrom(
-                  //       backgroundColor: Colors.deepOrange,
-                  //       foregroundColor: Colors.white,
-                  //       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  //     ),
-                  //   ),
-                  // ),
                 ],
               ),
             ),
