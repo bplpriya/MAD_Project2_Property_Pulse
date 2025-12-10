@@ -11,7 +11,6 @@ import 'property_details_screen.dart';
 import '../models/property_model.dart'; 
 import 'wishlist_screen.dart'; 
 import 'property_comparison_screen.dart';
-// NEW: Import the Notifications Screen
 import 'notifications_screen.dart'; 
 
 class PropertyListingsScreen extends StatefulWidget {
@@ -24,7 +23,7 @@ class PropertyListingsScreen extends StatefulWidget {
 class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
   
   final _firestore = FirebaseFirestore.instance;
-  final _auth = FirebaseAuth.instance; // For accessing the current user ID
+  final _auth = FirebaseAuth.instance; 
   String? _userId;
 
   String _selectedType = 'All';
@@ -35,8 +34,10 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
   double? _userLng;
   double _radiusKm = 5.0; 
 
-  // State for unread notifications count
   int _unreadNotificationCount = 0;
+  
+  // State for user role fetched from Firestore
+  String _userRole = 'Buyer'; 
 
   @override
   void initState() {
@@ -45,10 +46,26 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
     _determinePosition();
     if (_userId != null) {
       _listenForUnreadNotifications();
+      _fetchUserRole(); 
     }
   }
 
-  // NEW: Real-time listener for unread notifications
+  // Method to fetch user role from Firestore
+  Future<void> _fetchUserRole() async {
+    if (_userId == null) return;
+    try {
+      final doc = await _firestore.collection('users').doc(_userId).get();
+      if (doc.exists && mounted) {
+        setState(() {
+          // Fetch the role field saved during sign-up
+          _userRole = doc.data()?['role'] ?? 'Buyer';
+        });
+      }
+    } catch (e) {
+      print('Error fetching user role: $e');
+    }
+  }
+
   void _listenForUnreadNotifications() {
     if (_userId == null) return;
     
@@ -56,7 +73,7 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
       .collection('users')
       .doc(_userId)
       .collection('notifications')
-      .where('isRead', isEqualTo: false) // Only count unread
+      .where('isRead', isEqualTo: false)
       .snapshots()
       .listen((snapshot) {
         if (mounted) {
@@ -70,16 +87,14 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
   }
 
   void _navigateToScreen(BuildContext context, Widget screen) {
-    // Closes the drawer before navigating
     Navigator.of(context).pop(); 
     Navigator.of(context).push(
       MaterialPageRoute(builder: (context) => screen),
     );
   }
   
-  // Existing method remains...
+  // Existing location method remains...
   Future<void> _determinePosition() async {
-    // ... (omitted for brevity, assume this is the same as before)
     bool serviceEnabled;
     LocationPermission permission;
 
@@ -125,13 +140,42 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
       _userLat = lat;
       _userLng = lng;
       _radiusKm = radiusKm;
+      // Triggering a re-render will cause the StreamBuilder to refresh its query if _selectedType changed.
     });
+  }
+
+  void _checkSellerRoleAndNavigate(BuildContext context, bool isSeller) {
+    if (isSeller) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (context) => const AddPropertyScreen()),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('You must be logged in as a seller/agent to add a property.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isSeller = _auth.currentUser != null && _auth.currentUser!.email == 'seller@example.com'; // Simple mock role check
+    final isSeller = _userRole == 'Seller/Agent'; 
+
+    // --- Start Firestore Query Construction ---
+    Query listingsQuery = _firestore.collection('listings');
+    
+    // Step 1: Apply the least restrictive filter (Type) directly to Firestore.
+    // If 'All' is selected, don't apply the type filter.
+    if (_selectedType != 'All') {
+      listingsQuery = listingsQuery.where('type', isEqualTo: _selectedType);
+    }
+    
+    // We cannot add price filters or multiple range/equality filters without an index.
+    // The rest of the filtering must be done client-side.
+    // --- End Firestore Query Construction ---
 
     return Scaffold(
       appBar: AppBar(
@@ -139,7 +183,13 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
         backgroundColor: theme.primaryColor,
         foregroundColor: Colors.white,
         actions: [
-          // NEW: Notification Icon
+          
+          IconButton(
+            icon: const Icon(Icons.add_home),
+            tooltip: 'Add New Property',
+            onPressed: () => _checkSellerRoleAndNavigate(context, isSeller),
+          ),
+
           if (_userId != null)
             Stack(
               children: [
@@ -208,13 +258,16 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
           ),
         ],
       ),
+      
+      floatingActionButton: null, 
+      
       drawer: Drawer(
         child: ListView(
           padding: EdgeInsets.zero,
           children: [
             UserAccountsDrawerHeader(
               accountName: Text(_auth.currentUser?.email ?? 'Guest', style: const TextStyle(fontWeight: FontWeight.bold)),
-              accountEmail: const Text('View Profile'),
+              accountEmail: Text('Role: $_userRole'), 
               currentAccountPicture: CircleAvatar(
                 backgroundColor: Colors.white,
                 child: Text(
@@ -234,17 +287,17 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
               leading: const Icon(Icons.home),
               title: const Text('Listings'),
               onTap: () {
-                Navigator.of(context).pop(); // Close drawer
+                Navigator.of(context).pop(); 
               },
             ),
             
-            if (isSeller)
+            if (isSeller) 
               ListTile(
                 leading: const Icon(Icons.add_home),
                 title: const Text('Add New Property'),
                 onTap: () => _navigateToScreen(context, const AddPropertyScreen()),
               ),
-              
+            
             ListTile(
               leading: const Icon(Icons.favorite),
               title: const Text('Wishlist'),
@@ -263,7 +316,6 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
               onTap: () => _navigateToScreen(context, const ProfileScreen()),
             ),
             
-            // NEW: Notifications Drawer Item (already covered by AppBar icon but good for completeness)
             ListTile(
               leading: const Icon(Icons.notifications),
               title: const Text('Notifications'),
@@ -293,12 +345,8 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
         ),
       ),
       body: StreamBuilder<QuerySnapshot>(
-        stream: _firestore
-            .collection('listings')
-            .where('type', isEqualTo: _selectedType == 'All' ? null : _selectedType)
-            .where('price', isGreaterThanOrEqualTo: _minPrice)
-            .where('price', isLessThanOrEqualTo: _maxPrice)
-            .snapshots(),
+        // Use the simplified query
+        stream: listingsQuery.snapshots(),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return Center(child: Text('Error: ${snapshot.error}'));
@@ -308,19 +356,29 @@ class _PropertyListingsScreenState extends State<PropertyListingsScreen> {
             return const Center(child: CircularProgressIndicator());
           }
 
-          // Filter documents based on geographical proximity if location data is available
+          // Fetch all documents matching the primary Firestore filter (Type)
           final allProperties = snapshot.data!.docs.map(PropertyModel.fromDocument).toList();
           List<PropertyModel> filteredProperties = allProperties;
 
+          // --- PERFORM CLIENT-SIDE FILTERING HERE ---
+
+          // 1. Price Filtering (Client-side)
+          filteredProperties = filteredProperties.where((property) {
+            return property.price >= _minPrice && property.price <= _maxPrice;
+          }).toList();
+
+          // 2. Location Filtering (Client-side)
           if (_userLat != null && _userLng != null) {
-            filteredProperties = allProperties.where((property) {
+            filteredProperties = filteredProperties.where((property) {
               if (property.latitude != null && property.longitude != null) {
                 final distance = _calculateDistance(_userLat!, _userLng!, property.latitude!, property.longitude!);
                 return distance <= _radiusKm;
               }
-              return true; // Include if location is missing
+              return true; 
             }).toList();
           }
+          
+          // --- END CLIENT-SIDE FILTERING ---
 
           if (filteredProperties.isEmpty) {
             return const Center(
