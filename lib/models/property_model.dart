@@ -1,5 +1,3 @@
-// lib/models/property_model.dart (The file you need to update)
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PropertyModel {
@@ -17,9 +15,14 @@ class PropertyModel {
   final double? latitude;
   final double? longitude;
 
-  // NEW: Moderation fields
+  // Moderation fields
   final bool? isRemoved;
   final int? flagCount;
+
+  // NEW: Transaction/Sale fields
+  final bool? isSold;
+  final String? soldToId;
+  final Timestamp? saleTimestamp;
 
   PropertyModel({
     required this.id,
@@ -33,9 +36,13 @@ class PropertyModel {
     required this.timestamp,
     this.latitude, 
     this.longitude,
-    // NEW
+    // Moderation fields
     this.isRemoved,
     this.flagCount,
+    // NEW: Transaction/Sale fields
+    this.isSold,
+    this.soldToId,
+    this.saleTimestamp,
   });
 
   factory PropertyModel.fromDocument(DocumentSnapshot doc) {
@@ -63,9 +70,14 @@ class PropertyModel {
       latitude: parseDouble(data['latitude']),
       longitude: parseDouble(data['longitude']),
 
-      // NEW: Moderation fields
+      // Moderation fields (using default values for safety)
       isRemoved: data['isRemoved'] as bool? ?? false,
       flagCount: data['flagCount'] as int? ?? 0,
+
+      // NEW: Transaction/Sale fields
+      isSold: data['isSold'] as bool? ?? false,
+      soldToId: data['soldToId'] as String?,
+      saleTimestamp: data['saleTimestamp'] as Timestamp?,
     );
   }
 }
