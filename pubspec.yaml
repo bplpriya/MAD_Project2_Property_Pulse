@@ -18,11 +18,14 @@ dependencies:
   firebase_storage: ^11.6.0 # ADDED: Required for image upload
   intl: ^0.18.1
 
+  # firebase_messaging: ^16.0.4
+
   # Utility Packages
   image_picker: ^1.1.0
   http: ^1.2.0
   cupertino_icons: ^1.0.8
   geolocator: ^11.0.0
+  firebase_messaging: ^14.7.10
 
 dev_dependencies:
   flutter_test:

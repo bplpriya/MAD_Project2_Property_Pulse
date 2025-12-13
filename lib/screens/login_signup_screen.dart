@@ -2,15 +2,17 @@
 
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import '../services/auth_service.dart';
-import '../models/user_model.dart'; 
+import 'package:cloud_firestore/cloud_firestore.dart'; 
+import 'package:firebase_messaging/firebase_messaging.dart'; 
+import '../services/auth_service.dart'; // Ensure this path is correct
+import '../models/user_model.dart';    // Ensure UserRole is defined here
 import 'property_listings_screen.dart'; 
 
 class LoginSignupScreen extends StatefulWidget {
   const LoginSignupScreen({super.key});
 
   @override
-  _LoginSignupScreenState createState() => _LoginSignupScreenState();
+  State<LoginSignupScreen> createState() => _LoginSignupScreenState();
 }
 
 class _LoginSignupScreenState extends State<LoginSignupScreen> {
@@ -24,12 +26,47 @@ class _LoginSignupScreenState extends State<LoginSignupScreen> {
   bool _isLoading = false;
   UserRole _selectedRole = UserRole.Buyer; 
 
+  @override
+  void initState() {
+    super.initState();
+    // 1. Request notification permissions immediately when the app opens
+    _requestNotificationPermissions();
+  }
+
+  // --- NEW: Triggers the system popup to "Allow Notifications" ---
+  Future<void> _requestNotificationPermissions() async {
+    FirebaseMessaging messaging = FirebaseMessaging.instance;
+    NotificationSettings settings = await messaging.requestPermission(
+      alert: true,
+      badge: true,
+      sound: true,
+    );
+    if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+      print('User granted notification permission');
+    }
+  }
+
+  // --- NEW: Helper to save the device token to the specific user document ---
+  Future<void> _updateFCMToken(String userId) async {
+    try {
+      String? token = await FirebaseMessaging.instance.getToken();
+      if (token != null) {
+        await FirebaseFirestore.instance.collection('users').doc(userId).set({
+          'fcmToken': token,
+        }, SetOptions(merge: true));
+        print("Token saved: $token");
+      }
+    } catch (e) {
+      print("Error saving FCM token: $e");
+    }
+  }
+
   void toggleForm() {
     setState(() {
       isLogin = !isLogin;
       errorMessage = '';
       _nameController.clear(); 
-      _passwordController.clear(); // Clear password when toggling
+      _passwordController.clear();
     });
   }
 
@@ -39,9 +76,7 @@ class _LoginSignupScreenState extends State<LoginSignupScreen> {
     final name = _nameController.text.trim();
 
     if (email.isEmpty || password.isEmpty || (!isLogin && name.isEmpty)) {
-      setState(() {
-        errorMessage = "Please fill all required fields.";
-      });
+      setState(() => errorMessage = "Please fill all required fields.");
       return;
     }
 
@@ -51,16 +86,19 @@ class _LoginSignupScreenState extends State<LoginSignupScreen> {
       User? user;
       
       if (isLogin) {
-        // --- LOGIN: Navigate on success ---
+        // --- LOGIN LOGIC ---
         user = await _authService.signIn(email: email, password: password);
         
         if (user != null && mounted) {
+          // Update the device token so the seller can receive alerts
+          await _updateFCMToken(user.uid);
+          
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (context) => const PropertyListingsScreen()),
           );
         }
       } else {
-        // --- SIGN UP: Show message and switch to Login view ---
+        // --- SIGN UP LOGIC ---
         user = await _authService.signUp(
           name: name,
           email: email,
@@ -69,28 +107,25 @@ class _LoginSignupScreenState extends State<LoginSignupScreen> {
         );
         
         if (user != null && mounted) {
-          // Show success message
+          // Update the device token for the new account
+          await _updateFCMToken(user.uid);
+
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Sign Up Successful! Please log in now.')),
+            const SnackBar(content: Text('Sign Up Successful! Please log in.')),
           );
-          // Switch form back to Login view
           setState(() {
             isLogin = true;
             _nameController.clear();
-            _passwordController.clear(); // Clear password after successful signup
+            _passwordController.clear();
           });
         }
       }
     } on FirebaseAuthException catch (e) {
-      setState(() {
-        errorMessage = e.message ?? "An authentication error occurred."; 
-      });
+      setState(() => errorMessage = e.message ?? "An authentication error occurred.");
     } catch (e) {
-      setState(() {
-        errorMessage = "An unexpected error occurred: ${e.toString()}";
-      });
+      setState(() => errorMessage = "Error: ${e.toString()}");
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -105,13 +140,10 @@ class _LoginSignupScreenState extends State<LoginSignupScreen> {
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(
       labelText: label,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(10),
-        borderSide: BorderSide.none,
-      ),
+      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide.none),
       filled: true,
       fillColor: Colors.grey.shade100,
-      contentPadding: const EdgeInsets.symmetric(vertical: 15, horizontal: 10),
+      contentPadding: const EdgeInsets.symmetric(vertical: 15, horizontal: 15),
     );
   }
 
@@ -134,50 +166,33 @@ class _LoginSignupScreenState extends State<LoginSignupScreen> {
               ),
               const SizedBox(height: 30),
               
-              if (!isLogin)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 15),
-                  child: TextField(
-                    controller: _nameController,
-                    decoration: _inputDecoration('Full Name'),
-                  ),
+              if (!isLogin) ...[
+                TextField(
+                  controller: _nameController,
+                  decoration: _inputDecoration('Full Name'),
                 ),
-                
-              if (!isLogin)
-                Column(
-                  children: [
-                    const Text('Select Your Primary Role:', style: TextStyle(fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 10),
-                    SegmentedButton<UserRole>(
-                      segments: const <ButtonSegment<UserRole>>[
-                        ButtonSegment<UserRole>(
-                          value: UserRole.Buyer, 
-                          label: Text('Buyer'),
-                        ),
-                        ButtonSegment<UserRole>(
-                          value: UserRole.SellerAgent, 
-                          label: Text('Seller/Agent'),
-                        ),
-                      ],
-                      selected: <UserRole>{_selectedRole},
-                      onSelectionChanged: (Set<UserRole> newSelection) {
-                        setState(() {
-                          _selectedRole = newSelection.first; 
-                        });
-                      },
-                    ),
-                    const SizedBox(height: 15),
+                const SizedBox(height: 15),
+                const Text('Select Your Primary Role:', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 10),
+                SegmentedButton<UserRole>(
+                  segments: const <ButtonSegment<UserRole>>[
+                    ButtonSegment<UserRole>(value: UserRole.Buyer, label: Text('Buyer')),
+                    ButtonSegment<UserRole>(value: UserRole.SellerAgent, label: Text('Seller/Agent')),
                   ],
+                  selected: <UserRole>{_selectedRole},
+                  onSelectionChanged: (Set<UserRole> newSelection) {
+                    setState(() => _selectedRole = newSelection.first);
+                  },
                 ),
+                const SizedBox(height: 15),
+              ],
 
-              Padding(
-                padding: const EdgeInsets.only(bottom: 15),
-                child: TextField(
-                  controller: _emailController,
-                  decoration: _inputDecoration('Email'),
-                  keyboardType: TextInputType.emailAddress,
-                ),
+              TextField(
+                controller: _emailController,
+                decoration: _inputDecoration('Email'),
+                keyboardType: TextInputType.emailAddress,
               ),
+              const SizedBox(height: 15),
               TextField(
                 controller: _passwordController,
                 decoration: _inputDecoration('Password'),
@@ -196,29 +211,20 @@ class _LoginSignupScreenState extends State<LoginSignupScreen> {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
                   child: _isLoading
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
                       : Text(isLogin ? 'Login' : 'Sign Up', style: const TextStyle(fontSize: 18)),
                 ),
               ),
-              const SizedBox(height: 10),
               
               TextButton(
                 onPressed: toggleForm,
-                child: Text(isLogin
-                    ? "Don't have an account? Sign Up"
-                    : "Already have an account? Login"),
+                child: Text(isLogin ? "Don't have an account? Sign Up" : "Already have an account? Login"),
               ),
               
               if (errorMessage.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 20),
-                  child: Text(
-                    errorMessage,
-                    style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
-                  ),
+                  child: Text(errorMessage, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
                 ),
             ],
           ),

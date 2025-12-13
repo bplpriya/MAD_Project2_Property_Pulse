@@ -3,7 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
 class RatingReviewScreen extends StatefulWidget {
-  final String propertyId; // Pass the property ID
+  final String propertyId; // This is the required parameter causing the error
+  
   const RatingReviewScreen({super.key, required this.propertyId});
 
   @override
@@ -18,17 +19,21 @@ class _RatingReviewScreenState extends State<RatingReviewScreen> {
   Future<void> _submitReview() async {
     final user = FirebaseAuth.instance.currentUser;
     if (user == null) return;
+    
     if (rating == 0) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Please select a star rating")));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Please select a star rating")),
+      );
       return;
     }
 
     setState(() => _isSubmitting = true);
 
     try {
+      // Logic to add the review to the sub-collection of the specific listing
       await FirebaseFirestore.instance
-          .collection('listings') // Changed to your current collection name
-          .doc(widget.propertyId)
+          .collection('listings') 
+          .doc(widget.propertyId) // Uses the ID passed from the previous screen
           .collection('reviews')
           .add({
         'userId': user.uid,
@@ -38,12 +43,20 @@ class _RatingReviewScreenState extends State<RatingReviewScreen> {
         'timestamp': FieldValue.serverTimestamp(),
       });
 
-      Navigator.pop(context);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Review submitted!")));
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Review submitted!"), backgroundColor: Colors.green),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error: $e"), backgroundColor: Colors.red),
+        );
+      }
     } finally {
-      setState(() => _isSubmitting = false);
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -51,40 +64,57 @@ class _RatingReviewScreenState extends State<RatingReviewScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Rate & Review")),
-      body: Padding(
+      body: SingleChildScrollView( // Added scroll view to prevent overflow on keyboard popup
         padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text("How was your experience?", 
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Theme.of(context).primaryColor)),
+            Text(
+              "How was your experience?",
+              style: TextStyle(
+                fontSize: 20, 
+                fontWeight: FontWeight.bold, 
+                color: Theme.of(context).primaryColor,
+              ),
+            ),
             const SizedBox(height: 30),
-            // Star Rating Row...
+            
+            // Star Selection Row
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: List.generate(5, (index) {
                 return IconButton(
-                  icon: Icon(index < rating ? Icons.star : Icons.star_border, color: Colors.amber, size: 40),
+                  icon: Icon(
+                    index < rating ? Icons.star : Icons.star_border,
+                    color: Colors.amber,
+                    size: 40,
+                  ),
                   onPressed: () => setState(() => rating = index + 1.0),
                 );
               }),
             ),
             const SizedBox(height: 30),
+            
             TextField(
               controller: reviewController,
-              decoration: const InputDecoration(labelText: "Write a review (Optional)", border: OutlineInputBorder()),
+              decoration: const InputDecoration(
+                labelText: "Write a review (Optional)",
+                border: OutlineInputBorder(),
+              ),
               maxLines: 4,
             ),
             const SizedBox(height: 30),
+            
             ElevatedButton(
               onPressed: _isSubmitting ? null : _submitReview,
               style: ElevatedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 15),
                 backgroundColor: Theme.of(context).primaryColor,
+                foregroundColor: Colors.white,
               ),
-              child: _isSubmitting 
-                ? const CircularProgressIndicator(color: Colors.white) 
-                : const Text("Submit Review", style: TextStyle(fontSize: 18, color: Colors.white)),
+              child: _isSubmitting
+                  ? const CircularProgressIndicator(color: Colors.white)
+                  : const Text("Submit Review", style: TextStyle(fontSize: 18)),
             ),
           ],
         ),
