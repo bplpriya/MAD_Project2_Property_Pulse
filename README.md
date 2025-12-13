@@ -24,6 +24,13 @@
 * **Cloud Storage:** Item images are uploaded and managed via **Cloudinary**.
 * **Modern UI:** Clean, material-based design with a focus on readability and clear action buttons.
 
+### Push Notifications: 
+* Real-time alerts sent via **Firebase Cloud Messaging (FCM)**. Sellers receive instant notifications when a buyer "Likes" their property or interacts with their listing.
+
+### Device Token Management: 
+* Automatic registration of **unique FCM device tokens** stored in Firestore to ensure targeted message delivery.
+
+
 ***
 
 ## 🛠️ Tech Stack
